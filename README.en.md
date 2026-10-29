@@ -10,7 +10,7 @@ Based on [Andrej Karpathy](https://karpathy.ai/)'s [llm-wiki methodology](https:
 
 Turn scattered information into a growing, interconnected knowledge base
 
-[![version](https://img.shields.io/badge/v3.6.91-Safe%20Graph%20Rename%20%26%20Recovery-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.92-Reliable%20Source%20Intake-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-multi--platform-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -89,6 +89,7 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 
 | | Feature | Description |
 |---|---|---|
+| 📥 | **Reliable Source Intake** | A persistent backend queue preserves originals, creates source summaries, and updates the index and log; refreshes, hidden panels, and knowledge-base switches do not cancel accepted work; cancellation, retry, restart recovery, and duplicate-input detection are included |
 | 🧭 | **Community Close-up Map** | Entering a community now feels like zooming into the same region from the global graph; positions, tiers, labels, and return highlights stay stable, then fade after the global view settles |
 | ⚠️ | **Graph Identity and Warnings** | Same-named pages stay separate by knowledge-base-relative path; ambiguous links, broken links, pending pages, and portable path conflicts are explained while the graph remains readable, with read-only paged details |
 | 📝 | **Safe Graph Rename and Recovery** | Optionally rename a graph page within its current folder from a resolvable warning or the page reader; review the complete impact and every ambiguity first, with clear recovery after external edits, interruption, or a failed graph refresh, and an automatic final result after a queued refresh completes |

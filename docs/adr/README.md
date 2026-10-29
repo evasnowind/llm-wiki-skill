@@ -46,6 +46,7 @@
 - [ADR-30 本地优先与数据边界](./0030-local-first-data-boundaries.md)
 - [ADR-31 根目录保持 CommonJS 兼容](./0031-monorepo-root-keeps-commonjs-compatibility.md)
 - [ADR-32 一个图谱引擎，两个宿主（repo-wide 摘要，细节以 ADR-21 为准）](./0032-one-graph-engine-two-hosts.md)
+- [ADR-33 工作台可靠入库与 Skill 完整整理的边界](./0033-workbench-reliable-source-intake.md)
 
 ## When To Add One
 
