@@ -13,6 +13,7 @@ import {
 	watchKnowledgeBaseGraph,
 } from "./graph.js";
 import { defaultGraphRenameRouteService } from "./routes/graph-renames.js";
+import { defaultIngestJobRouteService } from "./routes/ingest-jobs.js";
 import { localHostOnly } from "./security/host.js";
 import {
 	generateCapabilityToken,
@@ -47,6 +48,7 @@ export async function startWorkbenchServer(
 	let server: ReturnType<typeof serve> | undefined;
 	try {
 		await bootstrapFromConfig();
+		await defaultIngestJobRouteService.recover();
 		const bootstrappedActive = getActive();
 		if (bootstrappedActive) {
 			const recovery = await defaultGraphRenameRouteService.recoverGraphRenameOperations(bootstrappedActive.kb.path);
@@ -86,11 +88,14 @@ async function closeWorkbenchServer(
 	server: ReturnType<typeof serve> | undefined,
 ): Promise<void> {
 	stopKnowledgeBaseGraphWatcher();
-	await Promise.all([
+	const results = await Promise.allSettled([
+		defaultIngestJobRouteService.close(),
 		closeHttpServer(server),
 		stopActiveGraphRebuilds(),
 		shutdownAgent(),
 	]);
+	const failure = results.find((result) => result.status === "rejected");
+	if (failure?.status === "rejected") throw failure.reason;
 }
 
 async function closeHttpServer(

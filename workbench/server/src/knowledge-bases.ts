@@ -54,7 +54,7 @@ const SKIP_DIRS = new Set([
 	"dist",
 	"build",
 ]);
-const INGEST_EXTS = new Set([".md", ".txt", ".pdf"]);
+const INGEST_EXTS = new Set([".md", ".txt", ".pdf", ".html"]);
 const MAX_SCAN_DEPTH = 5;
 const MAX_INGESTIBLE_FILES = 500;
 const INSPECT_SCAN_TTL_MS = 30 * 60 * 1000;

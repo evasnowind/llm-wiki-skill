@@ -27,6 +27,7 @@ import { createGraphRoutes, defaultGraphRouteService, type GraphRouteService } f
 import { createGraphRenameRoutes, defaultGraphRenameRouteService, type GraphRenameRouteService } from "./routes/graph-renames.js";
 import { createKnowledgeBaseRoutes, defaultKnowledgeBaseRouteService, type KnowledgeBaseRouteService } from "./routes/knowledge-bases.js";
 import { createPageRoutes, defaultPageRouteService, type PageRouteService } from "./routes/pages.js";
+import { createIngestJobRoutes, defaultIngestJobRouteService, type IngestJobRouteService } from "./routes/ingest-jobs.js";
 import {
 	createPromptRoutes,
 	defaultPromptRouteService,
@@ -74,6 +75,7 @@ export interface WorkbenchAppDeps {
 	promptService?: PromptRouteService;
 	/** batch digest 启动 + 进度 SSE route 依赖。 */
 	batchDigestService?: BatchDigestRouteService;
+	ingestJobService?: IngestJobRouteService;
 	/** 只读 graph events EventSource route 依赖。 */
 	graphEventsService?: GraphEventsRouteService;
 }
@@ -162,6 +164,7 @@ export function createApp(deps: WorkbenchAppDeps = {}): Hono {
 			deps.graphEventsService ?? defaultGraphEventsRouteService,
 		),
 	);
+	app.route("/api", createIngestJobRoutes(deps.ingestJobService ?? defaultIngestJobRouteService));
 
 	return app;
 }

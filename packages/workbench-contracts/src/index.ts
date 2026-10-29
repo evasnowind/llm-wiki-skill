@@ -25,6 +25,7 @@ export * from "./artifacts.js";
 export * from "./sse.js";
 export * from "./prompt-events.js";
 export * from "./batch-digest-events.js";
+export * from "./ingest-jobs.js";
 export * from "./graph-events.js";
 export * from "./graph-renames.js";
 export * from "./endpoints.js";

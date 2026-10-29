@@ -173,6 +173,34 @@ export const ENDPOINT_REGISTRY = freezeEndpointEntries([
 	// ---------- remaining migrated-json endpoints ----------
 	{
 		method: "GET",
+		path: "/api/knowledge-bases/ingest-jobs",
+		kind: "migrated-json",
+		safety: "read-only",
+		description: "读取当前知识库的持久入库任务",
+	},
+	{
+		method: "POST",
+		path: "/api/knowledge-bases/ingest-jobs",
+		kind: "migrated-json",
+		safety: "state-changing",
+		description: "持久化已授权素材并加入入库队列",
+	},
+	{
+		method: "POST",
+		path: "/api/knowledge-bases/ingest-jobs/:id/cancel",
+		kind: "migrated-json",
+		safety: "state-changing",
+		description: "显式取消入库任务，断开连接不会取消",
+	},
+	{
+		method: "POST",
+		path: "/api/knowledge-bases/ingest-jobs/:id/retry",
+		kind: "migrated-json",
+		safety: "state-changing",
+		description: "重试失败或取消的入库文件",
+	},
+	{
+		method: "GET",
 		path: "/api/knowledge-bases",
 		kind: "migrated-json",
 		safety: "read-only",

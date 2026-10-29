@@ -5,6 +5,7 @@ import { createSecurityMiddleware } from "./security/middleware.js";
 import type { PromptRouteService } from "./routes/prompt.js";
 import { defaultKnowledgeBaseRouteService } from "./routes/knowledge-bases.js";
 import type { GraphRenameRouteService } from "./routes/graph-renames.js";
+import type { IngestJobRouteService } from "./routes/ingest-jobs.js";
 
 const trustedOrigins = new Set(DEV_WORKBENCH_ORIGINS);
 
@@ -12,6 +13,7 @@ export interface RuntimeApplicationOptions {
 	promptService?: PromptRouteService;
 	chooseDirectory?: () => Promise<string | null>;
 	graphRenameService?: GraphRenameRouteService;
+	ingestJobService?: IngestJobRouteService;
 }
 
 /** Build the exact application served by the runtime without opening a port. */
@@ -34,6 +36,7 @@ export function createRuntimeApplication(
 			}
 			: {}),
 		...(options.graphRenameService ? { graphRenameService: options.graphRenameService } : {}),
+		...(options.ingestJobService ? { ingestJobService: options.ingestJobService } : {}),
 	});
 	return app;
 }
