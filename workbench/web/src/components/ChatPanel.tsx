@@ -683,13 +683,13 @@ export function ChatPanel({
 							onClick={startDetectedBatchDigest}
 							className="truncate text-left hover:text-foreground"
 						>
-							发现 {detectedBatch.inspect.ingestibleFiles.count} 个可消化文件，点击批量消化
+							发现 {detectedBatch.inspect.ingestibleFiles.count} 个可入库文件，点击批量入库
 						</button>
 						<button
 							type="button"
 							onClick={() => setDetectedBatch(null)}
 							className="rounded-sm p-0.5 hover:bg-accent hover:text-accent-foreground"
-							aria-label="关闭批量消化提示"
+							aria-label="关闭批量入库提示"
 						>
 							<X className="size-3.5" />
 						</button>

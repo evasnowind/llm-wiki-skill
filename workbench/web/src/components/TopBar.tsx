@@ -1,5 +1,6 @@
 import {
 	BookOpen,
+	Archive,
 	Bot,
 	CheckCircle2,
 	ChevronDown,
@@ -43,6 +44,9 @@ interface TopBarProps {
 	searchDisabled?: boolean;
 	modelDisabled?: boolean;
 	newConversationDisabled?: boolean;
+	ingestActiveCount?: number;
+	ingestOpen?: boolean;
+	onOpenIngest?: () => void;
 	onSearch: () => void;
 	onConfigChanged?: () => void;
 	onNewConversation: () => void;
@@ -60,6 +64,9 @@ export function TopBar({
 	searchDisabled = false,
 	modelDisabled = false,
 	newConversationDisabled = false,
+	ingestActiveCount = 0,
+	ingestOpen = false,
+	onOpenIngest,
 	onSearch,
 	onConfigChanged,
 	onNewConversation,
@@ -105,6 +112,21 @@ export function TopBar({
 			</div>
 
 			<div className="topbar-actions" aria-label="全局操作">
+				{onOpenIngest && (
+					<TopBarHint label="查看当前知识库的入库任务">
+						<button
+							type="button"
+							className={cn("topbar-icon-action topbar-text-action", ingestOpen && "topbar-icon-action-active")}
+							onClick={onOpenIngest}
+							disabled={!knowledgeBase?.valid}
+							aria-label={ingestActiveCount > 0 ? `入库任务，${ingestActiveCount} 项进行中` : "入库任务"}
+							aria-expanded={ingestOpen}
+						>
+							<Archive />
+							<span>入库任务{ingestActiveCount > 0 ? ` ${ingestActiveCount}` : ""}</span>
+						</button>
+					</TopBarHint>
+				)}
 				<TopBarHint label="搜索当前知识库">
 					<button
 						type="button"

@@ -9,7 +9,7 @@ import {
 	type PinMap,
 } from "@llm-wiki/graph-engine";
 
-import { BatchDigestPanel, type BatchDigestJob } from "@/components/BatchDigestPanel";
+import { IngestQueuePanel } from "@/components/IngestQueuePanel";
 import { AppearancePanel } from "@/components/AppearancePanel";
 import { ChatPanel } from "@/components/ChatPanel";
 import { GraphPanel } from "@/components/GraphPanel";
@@ -35,7 +35,7 @@ import {
 	type UIMessage,
 } from "@llm-wiki/workbench-contracts";
 import { listArtifacts } from "@/lib/api/artifacts";
-import { streamBatchDigest } from "@/lib/api/batch-digest";
+import { useIngestQueue } from "@/lib/use-ingest-queue";
 import {
 	createNewConversation,
 	listConversations,
@@ -173,7 +173,12 @@ function App() {
 	const [graphStatus, setGraphStatus] = useState<GraphStatusSnapshot>(DEFAULT_GRAPH_STATUS);
 	const [artifacts, setArtifacts] = useState<ArtifactManifest[]>([]);
 	const [drawerFullscreen, setDrawerFullscreen] = useState(false);
-	const [batchJob, setBatchJob] = useState<BatchDigestJob | null>(null);
+	const [ingestPanelOpen, setIngestPanelOpen] = useState(false);
+	const ingestQueue = useIngestQueue(active?.kb.path ?? null);
+	const ingestOutputRequestRef = useRef(0);
+	useEffect(() => {
+		ingestOutputRequestRef.current += 1;
+	}, [active?.kb.path]);
 	const [pendingGraphPrompt, setPendingGraphPrompt] = useState<{
 		id: string;
 		message: string;
@@ -701,132 +706,28 @@ function App() {
 		digestModel?: ModelRef | null;
 		concurrency: 1 | 3 | 5;
 	}) => {
-		const jobId = Math.random().toString(36).slice(2, 10);
-		setBatchJob({
-			id: jobId,
-			kbPath: input.kbPath,
-			status: "running",
-			total: input.filePaths.length,
-			completed: 0,
-			failed: 0,
-			files: input.filePaths.map((filePath, index) => ({
-				index,
-				filePath,
-				status: "queued",
-			})),
-			events: [],
+		setIngestPanelOpen(true);
+		void ingestQueue.enqueue(input).catch(() => {
+			// The scoped queue panel keeps the operation error visible.
 		});
-		void (async () => {
-			try {
-				const stream = await streamBatchDigest(input);
-				for await (const event of stream) {
-					setBatchJob((current) => {
-						if (!current || current.id !== jobId) return current;
-						if (event.type === "batch_started") {
-							return {
-								...current,
-								total: event.total,
-								outputDir: event.outputDir,
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_file_started") {
-							return {
-								...current,
-								current: event.filePath,
-								files: updateBatchFile(current.files, event.index, {
-									status: "running",
-								}),
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_file_progress") {
-							return {
-								...current,
-								files: updateBatchFile(current.files, event.index, {
-									status: "running",
-									chars: event.chars,
-								}),
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_file_completed") {
-							return {
-								...current,
-								completed: current.completed + 1,
-								current: event.filePath,
-								files: updateBatchFile(current.files, event.index, {
-									status: "done",
-									outputPath: event.outputPath,
-								}),
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_file_failed") {
-							return {
-								...current,
-								failed: current.failed + 1,
-								current: event.filePath,
-								files: updateBatchFile(current.files, event.index, {
-									status: "error",
-									error: event.message,
-								}),
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_completed") {
-							return {
-								...current,
-								status: "done",
-								completed: event.completed,
-								failed: event.failed,
-								outputDir: event.outputDir,
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_cancelled") {
-							return {
-								...current,
-								status: "error",
-								error: event.reason,
-								events: [...current.events, event],
-							};
-						}
-						if (event.type === "batch_failed") {
-							return {
-								...current,
-								status: "error",
-								error: event.message,
-								events: [...current.events, event],
-							};
-						}
-						return current;
-					});
-				}
-			} catch (err) {
-				setBatchJob((current) =>
-					current && current.id === jobId
-						? {
-								...current,
-								status: "error",
-								error: err instanceof Error ? err.message : String(err),
-							}
-						: current,
-				);
-			}
-		})();
 	};
 
-	const handleOpenBatchOutput = async (outputPath: string) => {
-		if (!batchJob) return;
-		const rel = toRelativePagePath(outputPath, batchJob.kbPath);
+	const handleOpenBatchOutput = async (kbPath: string, outputPath: string) => {
+		if (kbPath !== active?.kb.path) return;
+		const rel = toRelativePagePath(outputPath, kbPath);
 		if (!rel) return;
+		const requestId = ++ingestOutputRequestRef.current;
 		setDrawerWithRef(wikiDrawer(rel, { loading: true }));
+		const stillCurrent = () => ingestOutputRequestRef.current === requestId
+			&& drawerRef.current.mode === "wiki"
+			&& drawerRef.current.path === rel;
 		try {
-			const content = await readPage(batchJob.kbPath, rel);
-			setDrawerWithRef(wikiDrawer(rel, { content }));
+			const content = await readPage(kbPath, rel);
+			if (stillCurrent()) setDrawerWithRef(wikiDrawer(rel, { content }));
 		} catch (err) {
-			setDrawerWithRef(wikiDrawer(rel, { error: err instanceof Error ? err.message : String(err) }));
+			if (stillCurrent()) {
+				setDrawerWithRef(wikiDrawer(rel, { error: err instanceof Error ? err.message : String(err) }));
+			}
 		}
 	};
 
@@ -910,6 +811,9 @@ function App() {
 					searchDisabled={!activeKnowledgeBase?.valid}
 					modelDisabled={loading}
 					newConversationDisabled={loading}
+					ingestActiveCount={ingestQueue.activeCount}
+					ingestOpen={ingestPanelOpen}
+					onOpenIngest={() => setIngestPanelOpen((open) => !open)}
 					onSearch={() => setSearchOpen(true)}
 					onConfigChanged={handleConfigChanged}
 					onNewConversation={handleNewConversation}
@@ -1052,9 +956,18 @@ function App() {
 					onOpenChange={setSettingsOpen}
 					onConfigChanged={handleConfigChanged}
 				/>
-				<BatchDigestPanel
-					job={batchJob}
-					onClose={() => setBatchJob(null)}
+				<IngestQueuePanel
+					open={ingestPanelOpen}
+					knowledgeBaseName={active?.kb.name ?? null}
+					jobs={ingestQueue.jobs}
+					loading={ingestQueue.loading}
+					error={ingestQueue.error}
+					actionError={ingestQueue.actionError}
+					pendingIds={ingestQueue.pendingIds}
+					onClose={() => setIngestPanelOpen(false)}
+					onCancel={(id) => { void ingestQueue.cancel(id).catch(() => {}); }}
+					onRetry={(id) => { void ingestQueue.retry(id).catch(() => {}); }}
+					onRefresh={() => { void ingestQueue.refresh(); }}
 					onOpenOutput={handleOpenBatchOutput}
 				/>
 				<AppearancePanel
@@ -1079,14 +992,6 @@ function App() {
 			</div>
 		</TooltipProvider>
 	);
-}
-
-function updateBatchFile<T extends { index: number }>(
-	files: T[],
-	index: number,
-	patch: Partial<T>,
-): T[] {
-	return files.map((file) => (file.index === index ? { ...file, ...patch } : file));
 }
 
 function toRelativePagePath(outputPath: string, kbPath: string): string | null {

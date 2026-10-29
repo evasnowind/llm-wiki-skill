@@ -280,7 +280,7 @@ export function AddExternalDialog({ open, onOpenChange, onSubmit, onStartBatchDi
 								className="form-field min-w-0"
 							/>
 							<label className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-								<span>初始化后立即批量消化</span>
+								<span>初始化后立即批量入库</span>
 								<input
 									type="checkbox"
 									checked={digestAfterInit}

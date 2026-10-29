@@ -3882,6 +3882,64 @@
     background: color-mix(in srgb, var(--app-accent-soft) 48%, transparent);
   }
 
+  .ingest-panel {
+    width: 420px;
+  }
+
+  .ingest-panel .batch-header > div:first-child {
+    flex: 1;
+  }
+
+  .ingest-body {
+    max-height: min(560px, 70vh);
+  }
+
+  .ingest-hint {
+    margin: 0 0 12px;
+    color: var(--app-muted);
+    font-size: 11px;
+    line-height: 1.7;
+  }
+
+  .ingest-job + .ingest-job {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--app-border);
+  }
+
+  .ingest-job-heading,
+  .ingest-job-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0;
+  }
+
+  .ingest-job-actions {
+    justify-content: flex-end;
+  }
+
+  .ingest-action {
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    padding: 5px 9px;
+    color: var(--app-fg);
+    background: var(--app-raised);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .ingest-action:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
+
+  .ingest-panel .batch-file-detail {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .batch-title {
     color: var(--app-fg);
     font-size: 14px;
