@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, unlinkSync } from "node:fs";
-import { appendFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -18,6 +18,8 @@ import { defaultGraphRenameRouteService } from "../src/routes/graph-renames.js";
 import { defaultGraphRouteService } from "../src/routes/graph.js";
 import { createRuntimeApplication } from "../src/runtime-app.js";
 import { startWorkbenchServer } from "../src/startup.js";
+import { createIngestQueue } from "../src/ingest/queue.js";
+import { assertRegisteredKnowledgeBase, validateInspectedSourceFiles } from "../src/knowledge-bases.js";
 
 const FAKE_MODEL_MARKER = "browser-foundation-fake-model";
 const FAUX_PROVIDER = "browser-test-provider";
@@ -126,16 +128,38 @@ function recordRenameEvent(event: {
 	appendFileSync(renameEventsFile, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
+const browserIngestQueue = createIngestQueue({
+	root: path.join(browserAppDir, "browser-ingest"),
+	assertRegisteredKnowledgeBase,
+	validateSources: validateInspectedSourceFiles,
+	generate: async (input, progress, signal) => {
+		const content = await readFile(input.filePath, "utf8");
+		await appendFile(path.join(browserAppDir, "browser-ingest-events.jsonl"), `${JSON.stringify({ kbPath: input.kbPath, event: "generate" })}\n`);
+		await progress(30);
+		if (content.includes("[ingest-fail]") && existsSync(path.join(browserAppDir, "browser-ingest-fail"))) {
+			throw new Error("controlled ingest fixture failure");
+		}
+		while (content.includes("[ingest-hold]") && !existsSync(path.join(browserAppDir, "browser-ingest-release"))) {
+			if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+		return `# 可靠入库素材\n\n${content}\n`;
+	},
+});
+await browserIngestQueue.recover();
+
 const runningServer = await startWorkbenchServer({
 	createApplication: (token) => createRuntimeApplication(token, {
 		chooseDirectory: async () => selectedDirectory,
 		graphRenameService: browserGraphRenameService,
+		ingestJobService: { ...browserIngestQueue, assertRegisteredKnowledgeBase },
 	}),
 });
 
 let shutdownPromise: Promise<void> | undefined;
 function requestShutdown(): void {
-	shutdownPromise ??= runningServer.close().finally(() => {
+	shutdownPromise ??= Promise.all([runningServer.close(), browserIngestQueue.close()]).then(() => {}).finally(() => {
 		modelRegistry.hasConfiguredAuth = hasConfiguredAuth;
 		modelRegistry.unregisterProvider(FAUX_PROVIDER);
 		process.exitCode = 0;

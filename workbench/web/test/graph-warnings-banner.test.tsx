@@ -78,15 +78,23 @@ describe("GraphWarningsBanner", () => {
 		const details = screen.getByRole("button", { name: "查看详情" });
 		assert.equal(details.getAttribute("aria-expanded"), "false");
 		await click(details);
-		await waitFor(() => assert.deepEqual(calls, [undefined]));
+		await waitFor(() => {
+			assert.deepEqual(calls, [undefined]);
+			assert.match(document.body.textContent ?? "", /wiki\/synthesis\/first\.md.*第 1 行.*第 2 列/);
+		});
 		assert.equal(details.getAttribute("aria-expanded"), "true");
-		assert.match(document.body.textContent ?? "", /wiki\/synthesis\/first\.md.*第 1 行.*第 2 列/);
 		assert.equal(document.body.textContent?.match(/wiki\/entities\/candidate-shared\.md/g)?.length, 1);
 
 		await click(screen.getByRole("button", { name: "加载更多" }));
-		await waitFor(() => assert.deepEqual(calls, [undefined, "cursor-2"]));
+		await waitFor(() => {
+			assert.deepEqual(calls, [undefined, "cursor-2"]);
+			assert.match(document.body.textContent ?? "", /wiki\/synthesis\/middle\.md/);
+		});
 		await click(screen.getByRole("button", { name: "加载更多" }));
-		await waitFor(() => assert.deepEqual(calls, [undefined, "cursor-2", "cursor-3"]));
+		await waitFor(() => {
+			assert.deepEqual(calls, [undefined, "cursor-2", "cursor-3"]);
+			assert.match(document.body.textContent ?? "", /wiki\/synthesis\/last\.md/);
+		});
 		assert.equal(screen.queryByRole("button", { name: "加载更多" }), null);
 		assert.match(document.body.textContent ?? "", /wiki\/synthesis\/last\.md/);
 		assert.equal(document.body.textContent?.match(/wiki\/entities\/candidate-shared\.md/g)?.length, 1);
