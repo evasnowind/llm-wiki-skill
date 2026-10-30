@@ -198,7 +198,7 @@ export async function checkWorkbenchBoundaries(
 	const absoluteRoot = path.resolve(root);
 	const findings = [];
 	const report = (rule, file, message) => {
-		findings.push({ rule, file: path.relative(absoluteRoot, file), message });
+		findings.push({ rule, file: path.relative(absoluteRoot, file).split(path.sep).join("/"), message });
 	};
 
 	const webRoot = path.join(absoluteRoot, "workbench/web/src");
@@ -219,7 +219,7 @@ export async function checkWorkbenchBoundaries(
 		);
 	}
 	for (const file of webSourceFiles) {
-		const relative = path.relative(absoluteRoot, file);
+		const relative = path.relative(absoluteRoot, file).split(path.sep).join("/");
 		const source = await readFile(file, "utf8");
 		const calls = fetchCalls(source, file);
 		const hasForbiddenFetch = WEB_FETCH_FILES.has(relative)

@@ -16,6 +16,21 @@ async function fixture(files) {
 	return root;
 }
 
+test("native filesystem separators preserve fetch allowlists and canonical finding paths", async (t) => {
+	const root = await fixture({
+		"workbench/web/src/lib/api/client.ts": 'fetch("/api/health");',
+		"workbench/web/src/lib/api/prompt.ts": 'fetch("/api/prompt");',
+		"workbench/web/src/lib/api/batch-digest.ts": 'fetch("/api/digest");',
+		"workbench/web/src/components/renderers/HtmlRenderer.tsx": 'const fileUrl = "/api/file"; fetch(fileUrl);',
+		"workbench/web/src/components/Bad.tsx": 'fetch("/api/health");',
+	});
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const findings = await checkWorkbenchBoundaries(root);
+	assert.deepEqual(findings.filter((finding) => finding.rule === "web-direct-api-fetch").map((finding) => finding.file), [
+		"workbench/web/src/components/Bad.tsx",
+	]);
+});
+
 test("reports every forbidden workbench contract boundary", async (t) => {
 	const root = await fixture({
 		"workbench/web/src/components/Bad.tsx": [
