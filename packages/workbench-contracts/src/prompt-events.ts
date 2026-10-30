@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EvidenceCitationsSchema, RetrievalModeSchema } from "./evidence.js";
 
 import { ArtifactKindSchema } from "./artifacts.js";
 import { ErrorDetailsSchema, WorkbenchErrorCodeSchema } from "./errors.js";
@@ -11,6 +12,9 @@ export const PROMPT_SSE_SCHEMA_VERSION = WORKBENCH_SSE_SCHEMA_VERSION;
 
 export const PromptRequestBodySchema = z.object({
 	message: z.string().trim().min(1),
+		retrievalMode: RetrievalModeSchema.optional(),
+		kbPath: z.string().trim().min(1).max(4096).optional(),
+		conversationId: z.string().trim().min(1).max(512).optional(),
 }).strict();
 export type PromptRequestBody = z.infer<typeof PromptRequestBodySchema>;
 
@@ -33,6 +37,12 @@ const RunningCountsSchema = z.object({
 export const AssistantTextDeltaEventSchema = PromptEventIdentitySchema.extend({
 	type: z.literal("assistant_text_delta"),
 	delta: z.string(),
+}).strict();
+
+export const AssistantEvidenceEventSchema = PromptEventIdentitySchema.extend({
+	type: z.literal("assistant_evidence"),
+	mode: RetrievalModeSchema,
+	evidence: EvidenceCitationsSchema,
 }).strict();
 
 export const ToolStatusStartEventSchema = PromptEventIdentitySchema
@@ -106,6 +116,7 @@ export const AssistantErrorEventSchema = PromptEventIdentitySchema.extend({
 }).strict();
 
 export const PromptSseEventSchema = z.discriminatedUnion("type", [
+	AssistantEvidenceEventSchema,
 	AssistantTextDeltaEventSchema,
 	ToolStatusStartEventSchema,
 	ToolStatusUpdateEventSchema,
@@ -119,6 +130,7 @@ export const PromptSseEventSchema = z.discriminatedUnion("type", [
 
 export type PromptSseEvent = z.infer<typeof PromptSseEventSchema>;
 export type AssistantTextDeltaEvent = z.infer<typeof AssistantTextDeltaEventSchema>;
+export type AssistantEvidenceEvent = z.infer<typeof AssistantEvidenceEventSchema>;
 export type ToolStatusStartEvent = z.infer<typeof ToolStatusStartEventSchema>;
 export type ToolStatusUpdateEvent = z.infer<typeof ToolStatusUpdateEventSchema>;
 export type ToolStatusEndEvent = z.infer<typeof ToolStatusEndEventSchema>;

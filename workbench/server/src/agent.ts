@@ -32,6 +32,7 @@ import {
 import type { Model } from "@earendil-works/pi-ai";
 
 import { loadConfig, saveConfig } from "./config.js";
+import { disposeSessionWithDependents } from "./session-lifecycle.js";
 import type { ModelRef } from "./config.js";
 import { ensureKbSessionDir, listConversations } from "./conversations.js";
 import { scanAndRebuildArtifactIndex } from "./artifacts.js";
@@ -205,7 +206,7 @@ export async function reloadActiveResources(): Promise<ActiveContext | null> {
 async function disposeActive(): Promise<void> {
 	if (active) {
 		try {
-			active.session.dispose();
+			disposeSessionWithDependents(active.session);
 		} catch {
 			// noop
 		}
@@ -445,7 +446,7 @@ async function selectKbSerial(kbPath: string): Promise<ActiveContext> {
 	active = { kb, session, conversationId: session.sessionId, isNew };
 	if (previous) {
 		try {
-			previous.session.dispose();
+			disposeSessionWithDependents(previous.session);
 		} catch {
 			// noop
 		}

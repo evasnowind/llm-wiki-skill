@@ -20,11 +20,13 @@ import {
 import { jsonOk } from "../http/response.js";
 import { assertRegisteredKnowledgeBase } from "../knowledge-bases.js";
 import { listPageRefs, readWikiPage } from "../pages.js";
+import { listSourcePageRefs } from "../retrieval.js";
 
 export interface PageRouteService {
 	getActiveKnowledgeBasePath: () => string | null;
 	assertRegisteredKnowledgeBase: (kbPath: string) => Promise<string>;
 	listPageRefs: (kbPath: string, query: string, limit: number) => Promise<PageRef[]>;
+	listSourcePageRefs?: (kbPath: string) => Promise<PageRef[]>;
 	readWikiPage: (kbPath: string, relPath: string) => Promise<string>;
 }
 
@@ -32,6 +34,7 @@ export const defaultPageRouteService: PageRouteService = {
 	getActiveKnowledgeBasePath: () => getActive()?.kb.path ?? null,
 	assertRegisteredKnowledgeBase,
 	listPageRefs,
+	listSourcePageRefs,
 	readWikiPage,
 };
 
@@ -43,13 +46,19 @@ export function createPageRoutes(service: PageRouteService): Hono {
 			kb: c.req.query("kb"),
 			q: c.req.query("q"),
 			limit: c.req.query("limit"),
+			retrievalMode: c.req.query("retrievalMode"),
 		});
 		const kbPath = await resolvePageKnowledgeBase(query.kb, service);
 		try {
+			const refs = query.retrievalMode === "sources-only"
+				? (await service.listSourcePageRefs?.(kbPath) ?? [])
+					.filter((ref) => `${ref.path} ${ref.title}`.toLocaleLowerCase().includes(query.q.toLocaleLowerCase()))
+					.slice(0, query.limit)
+				: await service.listPageRefs(kbPath, query.q, query.limit);
 			return jsonOk(
 				c,
 				PageRefsDataSchema.parse(
-					await service.listPageRefs(kbPath, query.q, query.limit),
+					refs,
 				),
 			);
 		} catch (err) {

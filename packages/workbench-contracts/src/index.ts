@@ -19,6 +19,7 @@ export * from "./auth.js";
 export * from "./knowledge-bases.js";
 export * from "./conversations.js";
 export * from "./pages.js";
+export * from "./evidence.js";
 export * from "./graph.js";
 export * from "./graph-warnings.js";
 export * from "./artifacts.js";

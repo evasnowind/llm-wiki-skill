@@ -27,6 +27,7 @@ import { createGraphRoutes, defaultGraphRouteService, type GraphRouteService } f
 import { createGraphRenameRoutes, defaultGraphRenameRouteService, type GraphRenameRouteService } from "./routes/graph-renames.js";
 import { createKnowledgeBaseRoutes, defaultKnowledgeBaseRouteService, type KnowledgeBaseRouteService } from "./routes/knowledge-bases.js";
 import { createPageRoutes, defaultPageRouteService, type PageRouteService } from "./routes/pages.js";
+import { createEvidenceRoutes, defaultEvidenceRouteService, type EvidenceRouteService } from "./routes/evidence.js";
 import { createIngestJobRoutes, defaultIngestJobRouteService, type IngestJobRouteService } from "./routes/ingest-jobs.js";
 import {
 	createPromptRoutes,
@@ -65,6 +66,7 @@ export interface WorkbenchAppDeps {
 	conversationService?: ConversationRouteService;
 	/** wiki 页面读取 / 引用候选 route 依赖。 */
 	pageService?: PageRouteService;
+	evidenceService?: EvidenceRouteService;
 	/** 图谱读取、rebuild 与 layout 读写 route 依赖。 */
 	graphService?: GraphRouteService;
 	/** graph page rename / recovery route dependency. */
@@ -136,6 +138,7 @@ export function createApp(deps: WorkbenchAppDeps = {}): Hono {
 		"/api",
 		createPageRoutes(deps.pageService ?? defaultPageRouteService),
 	);
+	app.route("/api", createEvidenceRoutes(deps.evidenceService ?? defaultEvidenceRouteService));
 	app.route(
 		"/api",
 		createGraphRoutes(deps.graphService ?? defaultGraphRouteService),

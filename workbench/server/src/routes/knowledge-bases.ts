@@ -301,7 +301,7 @@ export function serializeActiveContext(
 			conversation: {
 				id: ctx.conversationId,
 				isNew: ctx.isNew,
-				messages: piMessagesToUIMessages(ctx.session.state.messages),
+				messages: piMessagesToUIMessages(ctx.session.state.messages, ctx.session.sessionManager?.getBranch() ?? []),
 			},
 			model: extractModelInfo(ctx.session),
 		},

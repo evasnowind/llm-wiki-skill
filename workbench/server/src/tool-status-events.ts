@@ -6,6 +6,8 @@ import {
   type ArtifactKind,
   type PromptSseEvent,
   type WorkbenchErrorCode,
+  type EvidenceCitation,
+  type RetrievalMode,
 } from "@llm-wiki/workbench-contracts";
 
 import {
@@ -285,6 +287,11 @@ export class ToolStatusEventAdapter {
       title: input.title,
     };
   }
+
+	assistantEvidence(mode: RetrievalMode, evidence: EvidenceCitation[]): Extract<PromptSseEvent, { type: "assistant_evidence" }> | null {
+		if (this.terminalEmitted) return null;
+		return this.makeEvent({ type: "assistant_evidence", mode, evidence: [...evidence] });
+	}
 
   startTool(input: ToolStatusStartInput): ToolStatusStartEvent | null {
     if (this.terminalEmitted) return null;

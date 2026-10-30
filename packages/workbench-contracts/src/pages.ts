@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RetrievalModeSchema } from "./evidence.js";
 
 export const PageRefSchema = z.object({
 	path: z.string(),
@@ -13,6 +14,7 @@ const OptionalKnowledgeBaseQuerySchema = z.object({
 });
 
 export const PageRefsQuerySchema = OptionalKnowledgeBaseQuerySchema.extend({
+	retrievalMode: RetrievalModeSchema.optional(),
 	q: z.string().optional().default(""),
 	limit: z.coerce.number().int().min(1).max(5000).optional().default(20),
 }).strict();

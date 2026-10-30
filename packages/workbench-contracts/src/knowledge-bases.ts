@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EvidenceCitationsSchema, RetrievalModeSchema } from "./evidence.js";
 
 export const KnowledgeBaseInfoSchema = z.object({
 	path: z.string(),
@@ -127,6 +128,8 @@ export const UIMessageSchema = z.object({
 	id: z.string(),
 	role: z.enum(["user", "assistant"]),
 	content: z.string(),
+	evidence: EvidenceCitationsSchema.optional(),
+	retrievalMode: RetrievalModeSchema.optional(),
 	tools: z.array(
 		z.object({
 			name: z.string(),

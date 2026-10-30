@@ -25,6 +25,7 @@ import { inspectKnowledgeBasePath } from "../knowledge-bases.js";
 import {
 	formatSearchResultsForTool,
 	searchKnowledgeBase,
+	type SearchKnowledgeBaseOutput,
 } from "../retrieval.js";
 
 // ============= 状态 =============
@@ -37,6 +38,7 @@ interface KnowledgeBaseState {
 export interface PendingKnowledgeContextOwner {
   runId: string;
   conversationId: string;
+  publishSearchEvidence?: (search: SearchKnowledgeBaseOutput) => Promise<SearchKnowledgeBaseOutput>;
 }
 
 let current: KnowledgeBaseState | null = null;
@@ -298,11 +300,14 @@ export default function knowledgeBaseExtension(pi: ExtensionAPI) {
 					details: { selected: true, count: 0, files: [] },
 				};
 			}
-			const search = await searchKnowledgeBase(current.path, query, {
+			let search = await searchKnowledgeBase(current.path, query, {
 				totalBudgetChars: 4000,
 			});
+			const publisher = pendingKnowledgeContextOwner.getStore()?.publishSearchEvidence;
+			if (publisher) search = await publisher(search);
+			const formatted = formatSearchResultsForTool(search);
 			return {
-				content: [{ type: "text", text: formatSearchResultsForTool(search) }],
+				content: [{ type: "text", text: publisher ? formatted : formatted.replace(/\[(\d+)\]\(#evidence-E\d+\)/gu, "[$1]") }],
 				details: {
 					selected: true,
 					count: search.results.length,

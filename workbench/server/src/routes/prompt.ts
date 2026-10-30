@@ -4,10 +4,17 @@ import { streamSSE } from "hono/streaming";
 import {
   PromptRequestBodySchema,
   type PromptSseEvent,
+  type EvidenceCitation,
+  type RetrievalMode,
 } from "@llm-wiki/workbench-contracts";
 
+import type { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+
 import { artifactEvents, type ArtifactCreatedEvent } from "../artifacts.js";
-import { finalizeSessionTerminalPersistence, getActive } from "../agent.js";
+import { authStorage, modelRegistry, finalizeSessionTerminalPersistence, getActive } from "../agent.js";
+import { branchEntryIds, persistTurnEvidence } from "../evidence-metadata.js";
+import { registerSessionDependent } from "../session-lifecycle.js";
+import { appendSourcesOnlyAssistant, appendSourcesOnlyUser, buildSourcesOnlyQuestion, createSourcesOnlySession, localSourcesOnlyAssistant, NO_SOURCE_EVIDENCE_REPLY } from "../sources-only.js";
 import { PublishedAssistantText } from "../extensions/prompt-terminal.js";
 import {
   clearPendingKnowledgeContext,
@@ -22,6 +29,7 @@ import {
   searchKnowledgeBase,
   shouldUseKnowledgeBase,
   writeRetrievalLog,
+  type SearchKnowledgeBaseOutput,
 } from "../retrieval.js";
 import {
   OrderedSseWriter,
@@ -34,6 +42,7 @@ export interface PromptSession {
   prompt: (message: string) => Promise<void>;
   abort?: () => void;
   abortCompaction?: () => void;
+  sessionManager?: SessionManager;
   state: { model?: { contextWindow?: unknown } };
 }
 
@@ -58,6 +67,8 @@ export interface PromptRunContext extends PromptRunHandle {
   runId: string;
   messageId: string;
   message: string;
+  retrievalMode?: RetrievalMode;
+  isolatedSession?: PromptSession;
   active: PromptActiveContext;
   session: PromptSession;
   sessionEvents: PromptSessionEventQueue;
@@ -152,6 +163,10 @@ export function createPromptRoutes(service: PromptRouteService): Hono {
   router.post("/prompt", async (c) => {
     const body = await parseValidatedBody(c, PromptRequestBodySchema);
     const { active, session } = resolveRunSeed(service);
+    if ((body.kbPath !== undefined && body.kbPath !== active.kbPath)
+      || (body.conversationId !== undefined && body.conversationId !== active.conversationId)) {
+      throw new HttpContractError("INVALID_REQUEST", "对话或知识库已切换，请刷新后重试");
+    }
 
     const runId = service.createRunId();
     const messageId = service.createMessageId(runId);
@@ -189,6 +204,7 @@ export function createPromptRoutes(service: PromptRouteService): Hono {
         runId,
         messageId,
         message: body.message,
+        retrievalMode: body.retrievalMode ?? "knowledge",
         active,
         session,
         adapter,
@@ -310,6 +326,10 @@ export const defaultPromptRouteService: PromptRouteService = {
     const session = ctx.session;
     const active = ctx.active;
     const message = ctx.message;
+    const mode = ctx.retrievalMode ?? "knowledge";
+    const beforeEntries = branchEntryIds(session.sessionManager);
+    let evidence: EvidenceCitation[] = [];
+    let retrievalWarnings: string[] = [];
     const isCurrentRun = () => {
       const current = getActive();
       return (
@@ -320,7 +340,7 @@ export const defaultPromptRouteService: PromptRouteService = {
       );
     };
     const explicitRefs = parseExplicitPageRefs(message);
-    const shouldSearch = shouldUseKnowledgeBase(message, true);
+    const shouldSearch = mode === "sources-only" || shouldUseKnowledgeBase(message, true);
     let knowledgeContext: string | null = null;
     {
       const baseLog = {
@@ -348,14 +368,17 @@ export const defaultPromptRouteService: PromptRouteService = {
           );
           const search = await searchKnowledgeBase(active.kbPath, message, {
             explicitRefs,
+            mode,
             totalBudgetChars: contextBudgetFromWindow(
               session.state?.model?.contextWindow,
             ),
           });
-          knowledgeContext = buildKnowledgeContextMessage({
+          retrievalWarnings = (search.warnings ?? []).slice(0, 10).map((warning) => warning.slice(0, 512));
+          evidence = (search.evidence ?? []).filter((citation) => mode !== "sources-only" || citation.kind === "raw");
+          knowledgeContext = mode === "knowledge" ? buildKnowledgeContextMessage({
             kb: { name: active.name, path: active.kbPath },
             search,
-          });
+          }) : null;
           if (!isCurrentRun()) return;
           await ctx.writer.write(
             ctx.adapter.endTool({
@@ -363,9 +386,9 @@ export const defaultPromptRouteService: PromptRouteService = {
               toolName: "knowledge_search",
               result: {
                 summary:
-                  search.results.length > 0
+                  (search.results.length > 0
                     ? `已检索到 ${search.results.length} 个相关页面`
-                    : "当前知识库未找到相关页面",
+                    : "本次检索未返回相关页面") + (retrievalWarnings.length ? "；部分内容未能检索" : ""),
                 count: search.results.length,
               },
             }),
@@ -381,6 +404,9 @@ export const defaultPromptRouteService: PromptRouteService = {
             error: null,
           }).catch(() => {});
         } catch {
+          evidence = [];
+          knowledgeContext = null;
+          retrievalWarnings = ["知识库检索失败，本轮未能完整读取素材。"];
           const errorText = "知识库检索失败";
           await ctx.writer.write(
             ctx.adapter.endTool({
@@ -407,17 +433,28 @@ export const defaultPromptRouteService: PromptRouteService = {
       }
     }
     if (!isCurrentRun()) return;
+    await ctx.writer.write(ctx.adapter.assistantEvidence(mode, evidence));
     const contextOwner = {
       runId: ctx.runId,
       conversationId: active.conversationId,
+      async publishSearchEvidence(search: SearchKnowledgeBaseOutput): Promise<SearchKnowledgeBaseOutput> {
+        if (!isCurrentRun()) return { ...search, results: [], evidence: [] };
+        await ctx.sessionEvents.flush();
+        if (!isCurrentRun()) return { ...search, results: [], evidence: [] };
+        const registered = registerSearchEvidence(evidence, search);
+        await ctx.writer.write(ctx.adapter.assistantEvidence(mode, evidence));
+        return registered;
+      },
     };
     if (knowledgeContext) {
       setPendingKnowledgeContext(knowledgeContext, contextOwner);
     }
 	try {
-		await runWithPendingKnowledgeContextOwner(contextOwner, () =>
-			session.prompt(message),
-		);
+    if (mode === "sources-only") {
+      await runSourcesOnlyPrompt(ctx, evidence, isCurrentRun, createSourcesOnlySession, retrievalWarnings);
+    } else {
+      await runWithPendingKnowledgeContextOwner(contextOwner, () => session.prompt(message));
+    }
 	} finally {
 		await ctx.sessionEvents.flush();
 		finalizeSessionTerminalPersistence(
@@ -425,6 +462,7 @@ export const defaultPromptRouteService: PromptRouteService = {
 			ctx.adapter.pendingTerminalReason,
 			ctx.sessionEvents.publishedAssistantText.terminalText,
 		);
+    persistTurnEvidence(session.sessionManager, beforeEntries, { runId: ctx.runId, mode, evidence });
 	}
     for (const event of ctx.adapter.finishAssistant()) {
       await ctx.writer.write(event);
@@ -432,8 +470,12 @@ export const defaultPromptRouteService: PromptRouteService = {
   },
   abortSession(ctx) {
 		ctx.sessionEvents.recordCancellation(ctx.adapter);
-		ctx.session.abortCompaction?.();
-    ctx.session.abort?.();
+    if (ctx.retrievalMode === "sources-only") {
+      ctx.isolatedSession?.abort?.();
+    } else {
+      ctx.session.abortCompaction?.();
+      ctx.session.abort?.();
+    }
   },
   clearPendingKnowledgeContext(ctx) {
     clearPendingKnowledgeContext({
@@ -442,6 +484,94 @@ export const defaultPromptRouteService: PromptRouteService = {
     });
   },
 };
+
+/** Assign citations across all searches in one turn without rewriting earlier ids. */
+export function registerSearchEvidence(evidence: EvidenceCitation[], search: SearchKnowledgeBaseOutput): SearchKnowledgeBaseOutput {
+  const key = (item: EvidenceCitation) => JSON.stringify([item.path, item.fileHash, item.startLine, item.endLine, item.excerptHash]);
+  const assigned = new Map(evidence.map((item) => [key(item), item]));
+  const citations = new Map<string, EvidenceCitation>();
+  const results = search.results.flatMap((result) => {
+    const item = result.citation;
+    if (!item) return [];
+    let next = assigned.get(key(item));
+    if (!next && evidence.length < 50) {
+      next = { ...item, id: `E${evidence.length + 1}` };
+      evidence.push(next);
+      assigned.set(key(item), next);
+    }
+    if (!next) return [];
+    citations.set(next.id, next);
+    return [{ ...result, citation: next }];
+  });
+  return { ...search, results, evidence: [...citations.values()] };
+}
+
+export async function runSourcesOnlyPrompt(
+  ctx: PromptRunContext,
+  evidence: EvidenceCitation[],
+  isCurrentRun: () => boolean,
+  createSession: typeof createSourcesOnlySession = createSourcesOnlySession,
+  warnings: string[] = [],
+): Promise<void> {
+  if (!isCurrentRun()) return;
+  const main = ctx.session as unknown as AgentSession;
+  if (evidence.length === 0) {
+    appendSourcesOnlyUser(main, ctx.message);
+    const text = warnings.length
+      ? `原文证据不足：本次检索未能完整读取素材，暂不能确认是否存在相关证据。\n\n检索提示：${warnings.join("；")}`
+      : NO_SOURCE_EVIDENCE_REPLY;
+    const assistant = localSourcesOnlyAssistant(text, main.model);
+    ctx.sessionEvents.enqueueAgentEvent(ctx.adapter, ctx.writer, {
+      type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text },
+    });
+    ctx.sessionEvents.enqueueAgentEvent(ctx.adapter, ctx.writer, { type: "message_end", message: assistant });
+    await ctx.sessionEvents.flush();
+    appendSourcesOnlyAssistant(main, assistant);
+    return;
+  }
+  let isolated: AgentSession | null = null;
+  let unsubscribe = () => {};
+  let unregisterDependent = () => {};
+  let failed = false;
+  let userAppended = false;
+  try {
+    isolated = await createSession({ kbPath: ctx.active.kbPath, model: main.model, authStorage, modelRegistry });
+    ctx.isolatedSession = isolated as unknown as PromptSession;
+    unregisterDependent = registerSessionDependent(main, () => {
+      ctx.sessionEvents.recordCancellation(ctx.adapter);
+      isolated?.abort();
+    });
+    if (!isCurrentRun()) {
+      ctx.sessionEvents.recordCancellation(ctx.adapter);
+      return;
+    }
+    appendSourcesOnlyUser(main, ctx.message);
+    userAppended = true;
+    unsubscribe = isolated.subscribe((event) => ctx.sessionEvents.enqueueAgentEvent(ctx.adapter, ctx.writer, event));
+    await isolated.prompt(buildSourcesOnlyQuestion(ctx.message, evidence, warnings));
+  } catch {
+    if (!isCurrentRun()) return;
+    failed = true;
+    if (!userAppended) {
+      appendSourcesOnlyUser(main, ctx.message);
+      userAppended = true;
+    }
+    ctx.sessionEvents.enqueueAgentEvent(ctx.adapter, ctx.writer, {
+      type: "message_end", message: localSourcesOnlyAssistant("", main.model, "error"),
+    });
+  } finally {
+    await ctx.sessionEvents.flush();
+    const assistant = [...(isolated?.messages ?? [])].reverse().find((message) => message.role === "assistant");
+    if (userAppended) appendSourcesOnlyAssistant(main,
+      assistant?.role === "assistant" ? assistant : localSourcesOnlyAssistant("", main.model, ctx.adapter.pendingTerminalReason === "aborted" ? "aborted" : failed ? "error" : "stop"),
+      ctx.sessionEvents.publishedAssistantText.terminalText,
+    );
+    unsubscribe();
+    unregisterDependent();
+    isolated?.dispose();
+    delete ctx.isolatedSession;
+  }
+}
 
 function getAssistantMessageEnd(event: unknown): { stopReason: unknown } | null {
   if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message)) return null;

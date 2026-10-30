@@ -18,7 +18,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { EvidenceCitation, RetrievalMode } from "@llm-wiki/workbench-contracts";
+import { readTurnEvidence, userEntryIdsForMessages } from "./evidence-metadata.js";
 
 import { APP_DIR } from "./config.js";
 import {
@@ -43,6 +45,8 @@ export interface UIMessage {
 	role: "user" | "assistant";
 	content: string;
 	tools: { name: string; status: "done" }[];
+	evidence?: EvidenceCitation[];
+	retrievalMode?: RetrievalMode;
 }
 
 /**
@@ -93,9 +97,12 @@ export async function listConversations(kbAbsolutePath: string): Promise<Convers
  *     如果该 assistant 消息有工具调用，把工具名标到这个 UIMessage 的 tools 上
  *   - toolResult / 纯工具调用 / 自定义类型 → 忽略（历史里 tool 状态不重要）
  */
-export function piMessagesToUIMessages(messages: AgentMessage[]): UIMessage[] {
+export function piMessagesToUIMessages(messages: AgentMessage[], branch: readonly SessionEntry[] = []): UIMessage[] {
 	const result: UIMessage[] = [];
 	const toolResults = indexToolResults(messages);
+	const metadata = readTurnEvidence(branch);
+	const userIds = userEntryIdsForMessages(messages, branch);
+	let userEntryId: string | undefined;
 
 	// 一轮（两条 user 消息之间）里 pi 往往产出多条 assistant 消息：文字 → 工具调用 →
 	// 续写 …… 直播态把整轮聚合进一个气泡，这里合并成一个 UIMessage 以与直播保持一致。
@@ -121,22 +128,27 @@ export function piMessagesToUIMessages(messages: AgentMessage[]): UIMessage[] {
 		const tools = finalTerminalReason ? [] : pending.tools;
 		if (content.trim() || tools.length > 0) {
 			result.push({
-				id: `a-${result.length}`,
+				id: userEntryId ? `a-${userEntryId}` : `a-${result.length}`,
 				role: "assistant",
 				content,
 				tools: tools.map((name) => ({ name, status: "done" as const })),
+				...(userEntryId && metadata.has(userEntryId) ? {
+					evidence: metadata.get(userEntryId)!.evidence,
+					retrievalMode: metadata.get(userEntryId)!.mode,
+				} : {}),
 			});
 		}
 		pending = null;
 	};
 
-	for (const msg of messages) {
+	for (const [messageIndex, msg] of messages.entries()) {
 		if (msg.role === "user") {
 			flushAssistant();
+			userEntryId = userIds.get(messageIndex);
 			const text = stripKnowledgeContextForDisplay(extractText(msg));
 			if (text.trim()) {
 				result.push({
-					id: `u-${result.length}`,
+					id: userEntryId ? `u-${userEntryId}` : `u-${result.length}`,
 					role: "user",
 					content: text,
 					tools: [],

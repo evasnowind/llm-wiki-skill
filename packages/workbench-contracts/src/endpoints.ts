@@ -129,6 +129,13 @@ function freezeEndpointEntries<const Entries extends readonly EndpointEntry[]>(
 }
 
 export const ENDPOINT_REGISTRY = freezeEndpointEntries([
+	{
+		method: "POST",
+		path: "/api/evidence/read",
+		kind: "migrated-json",
+		safety: "read-only",
+		description: "读取并定位已检索的证据原文，无副作用",
+	},
 	// ---------- migrated-json（已迁移到统一 envelope） ----------
 	{
 		method: "GET",
