@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { basename } from "node:path";
-import { promisify } from "node:util";
 
 import { Hono } from "hono";
 
@@ -57,14 +55,19 @@ import {
 } from "../graph.js";
 import { defaultGraphRenameRouteService } from "./graph-renames.js";
 import {
+	chooseSystemDirectory,
+	DIRECTORY_PICKER_FAILURE_MESSAGE,
+	DIRECTORY_PICKER_TIMEOUT_MESSAGE,
+	isDirectoryPickerCancellation,
+} from "../platform/directory-picker.js";
+import { BashUnavailableError, BASH_UNAVAILABLE_MESSAGE } from "../platform/bash.js";
+import {
 	createWiki,
 	InitConflictError,
 	KNOWLEDGE_BASE_SETUP_REQUIRED_MESSAGE,
 	initExistingWiki,
 	KnowledgeBaseSetupInputError,
 } from "../wiki-init.js";
-
-const execFileAsync = promisify(execFile);
 
 export interface KnowledgeBaseRouteService {
 	listKnowledgeBases: () => Promise<KnowledgeBaseInfo[]>;
@@ -74,7 +77,7 @@ export interface KnowledgeBaseRouteService {
 		purpose: string,
 		overwrite: boolean,
 	) => Promise<KnowledgeBaseInfo>;
-	chooseDirectory: () => Promise<string | null>;
+	chooseDirectory: (signal?: AbortSignal) => Promise<string | null>;
 	registerExternalKnowledgeBase: (
 		path: string,
 	) => Promise<RegisterExternalKnowledgeBaseData>;
@@ -115,7 +118,7 @@ export const defaultKnowledgeBaseRouteService: KnowledgeBaseRouteService = {
 			valid: true,
 		});
 	},
-	chooseDirectory: chooseSystemDirectory,
+	chooseDirectory: (signal) => chooseSystemDirectory({ signal }),
 	registerExternalKnowledgeBase: async (path) =>
 		RegisterExternalKnowledgeBaseDataSchema.parse(
 			await registerExternalKnowledgeBase(path),
@@ -236,7 +239,7 @@ export function createKnowledgeBaseRoutes(
 			return jsonOk(
 				c,
 				ChooseDirectoryDataSchema.parse({
-					path: await service.chooseDirectory(),
+					path: await service.chooseDirectory(c.req.raw.signal),
 				}),
 			);
 		} catch (err) {
@@ -341,6 +344,9 @@ function mapKnowledgeBaseSetupError(err: unknown): HttpContractError {
 	if (code === "BUSY") {
 		return new HttpContractError("BUSY", "知识库正在初始化，请稍后重试");
 	}
+	if (err instanceof BashUnavailableError) {
+		return new HttpContractError("INVALID_REQUEST", BASH_UNAVAILABLE_MESSAGE);
+	}
 	if (code === "SETUP_REQUIRED") {
 		return new HttpContractError(
 			"INVALID_REQUEST",
@@ -356,34 +362,11 @@ function mapKnowledgeBaseSetupError(err: unknown): HttpContractError {
 	if (code === "EMPTY_SELECTION") {
 		return new HttpContractError("INVALID_REQUEST", "没有选择文件夹");
 	}
+	if (code === "DIRECTORY_PICKER_TIMEOUT") {
+		return new HttpContractError("INTERNAL_ERROR", DIRECTORY_PICKER_TIMEOUT_MESSAGE);
+	}
+	if (code === "DIRECTORY_PICKER_FAILED") {
+		return new HttpContractError("INTERNAL_ERROR", DIRECTORY_PICKER_FAILURE_MESSAGE);
+	}
 	return mapKnowledgeBaseError(err);
-}
-
-async function chooseSystemDirectory(): Promise<string | null> {
-	if (process.platform !== "darwin") {
-		throw Object.assign(new Error("当前系统暂不支持文件夹选择器"), {
-			code: "ENOTSUP",
-		});
-	}
-	try {
-		const { stdout } = await execFileAsync("osascript", [
-			"-e",
-			'POSIX path of (choose folder with prompt "选择知识库文件夹")',
-		]);
-		const selectedPath = stdout.trim();
-		if (!selectedPath) {
-			throw Object.assign(new Error("没有选择文件夹"), {
-				code: "EMPTY_SELECTION",
-			});
-		}
-		return selectedPath;
-	} catch (err) {
-		if (isDirectoryPickerCancellation(err)) return null;
-		throw err;
-	}
-}
-
-function isDirectoryPickerCancellation(err: unknown): boolean {
-	const message = err instanceof Error ? err.message : String(err);
-	return message.includes("-128") || message.toLowerCase().includes("user canceled");
 }
