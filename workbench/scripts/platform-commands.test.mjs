@@ -131,6 +131,20 @@ test("passed test names containing failed cannot displace the actual assertion d
 	assert.ok(Buffer.byteLength(command) <= MAX_GITHUB_ANNOTATION_BYTES);
 });
 
+test("TAP annotations include separate assertion details before a long successful output tail", () => {
+	const failure = (number, message) => `not ok ${number} - native Windows operation\n  ---\n  duration_ms: 100\n  location: '<repo>/case.test.ts:1:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    ${message}\n    Expected values to be strictly equal:\n    'actual' !== 'expected'\n  code: 'ERR_ASSERTION'\n  stack: |-\n    AssertionError: ${message}\n  ...`;
+	const successful = Array.from({ length: 160 }, (_, index) => `ok ${index + 10} - handles failed tasks with expected Error: diagnostics`).join("\n");
+	const aggregate = "not ok 171 - parent test\n  ---\n  failureType: 'subtestsFailed'\n  error: '1 subtest failed'\n  ...";
+	const output = ["TAP version 13", failure(1, "actual cache assertion reason"), successful, failure(170, "actual graph assertion reason"), aggregate, successful, "1..172", "# tests 172", "# pass 170", "# fail 2"].join("\n");
+	const command = githubErrorAnnotation("backend", output);
+	assert.match(command, /TAP failure details/);
+	assert.match(command, /actual cache assertion reason/);
+	assert.match(command, /actual graph assertion reason/);
+	assert.match(command, /Expected values to be strictly equal/);
+	assert.doesNotMatch(command, /parent test|subtestsFailed/);
+	assert.ok(Buffer.byteLength(command) <= MAX_GITHUB_ANNOTATION_BYTES);
+});
+
 test("build diagnostics have separate safe npm commands for server, web and typecheck", () => {
 	const cli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
 	const executable = "C:\\Program Files\\nodejs\\node.exe";

@@ -21,6 +21,7 @@ export const PLATFORM_BACKEND_TESTS = [
 	"workbench/server/src/graph.test.ts",
 	"workbench/server/src/graph-rename-portability.test.ts",
 	"workbench/server/src/ingest-queue.test.ts",
+	"workbench/server/src/cache-portability.test.ts",
 	"workbench/server/src/retrieval.test.ts",
 	"workbench/server/src/markdown-retrieval.test.ts",
 	"workbench/server/src/evidence-reader.test.ts",

@@ -20,6 +20,23 @@ export function sanitizePlatformOutput(value, { repoRoot, sandbox, home, userHom
 
 function diagnosticExcerpt(output) {
 	const lines = output.split("\n");
+	const tapFailures = [];
+	for (let index = 0; index < lines.length; index++) {
+		if (!/^\s*not ok\s+\d+(?:\s|$)/u.test(lines[index])) continue;
+		const open = lines.findIndex((line, position) => position > index && position <= index + 4 && /^\s*---\s*$/u.test(line));
+		if (open < 0) continue;
+		const indent = lines[open].match(/^\s*/u)[0];
+		let end = open + 1;
+		while (end < lines.length && lines[end].replace(/\r$/u, "") !== indent + "...") end++;
+		if (end === lines.length) continue;
+		const block = lines.slice(index, end + 1);
+		// Parent subtest summaries repeat children without their assertion details.
+		if (block.some((line) => /^\s*failureType: ['"]?subtestsFailed['"]?\s*$/u.test(line))) continue;
+		tapFailures.push(block.length > 56 ? [...block.slice(0, 46), "  [failure detail truncated]", ...block.slice(-8)] : block);
+	}
+	if (tapFailures.length > 0) {
+		return ["[TAP failure details]", ...tapFailures.slice(0, 6).flatMap((block) => [...block, ""]), "[output tail]", ...lines.slice(-24)].join("\n");
+	}
 	const footer = lines.findLastIndex((line) => /^\s*✖ failing tests:/u.test(line));
 	const start = Math.max(0, footer);
 	const passed = (line) => /^\s*(?:[✔✓]|ok(?:\s+\d|$)|#\s*Subtest:)/u.test(line);
