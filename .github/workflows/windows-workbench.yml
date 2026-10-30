@@ -1,0 +1,72 @@
+name: windows-workbench
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-workbench:
+    runs-on: windows-latest
+    timeout-minutes: 18
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows workbench
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright-windows
+    steps:
+      - name: Check out into a path containing spaces
+        uses: actions/checkout@v4
+        with:
+          path: windows workbench
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: windows workbench/.nvmrc
+          cache: npm
+          cache-dependency-path: windows workbench/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify native Windows and the preinstalled Git Bash
+        run: |
+          node -e 'if (process.platform !== "win32") throw new Error("Windows Node.js is required")'
+          $bash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+          if (-not (Test-Path $bash)) { throw 'Git for Windows Bash is required by the workbench' }
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build the workbench and shared packages
+        run: |
+          npm run build -w @llm-wiki-agent/server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build -w @llm-wiki-agent/web
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run typecheck
+          exit $LASTEXITCODE
+      - name: Test native scripts, picker, names, queues and evidence
+        timeout-minutes: 5
+        run: node workbench/scripts/run-platform-workbench-tests.mjs backend --require-windows
+      - name: Install the existing Playwright Chromium dependency
+        timeout-minutes: 4
+        run: node node_modules/playwright/cli.js install chromium
+      - name: Test intake and evidence in a real Windows browser
+        timeout-minutes: 5
+        run: node workbench/scripts/run-platform-workbench-tests.mjs browser --require-windows
+      - name: Upload sanitized native diagnostics
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-workbench-diagnostics
+          path: |
+            windows workbench/.tmp/windows-workbench/
+            windows workbench/.tmp/markdown-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
