@@ -10,7 +10,7 @@
 
 把碎片化的信息变成持续积累、互相链接的知识库
 
-[![version](https://img.shields.io/badge/v3.6.93-Markdown检索与出处-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.94-Windows兼容修复-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-多平台-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -90,6 +90,7 @@ bash install.sh --platform hermes
 | | 功能 | 说明 |
 |---|---|---|
 | 📥 | **可靠入库队列** | 保留原文、生成素材摘要并更新索引日志；任务持久化，刷新、关闭面板或切换知识库后仍可继续查看；支持取消、失败重试和重启恢复，相同输入不重复生成 |
+| 🪟 | **Windows 工作台兼容** | 初始化与图谱统一定位 Git Bash，支持中文空格路径；原生目录选择器、可移植库名校验和 Windows 工作台 CI 覆盖关键流程 |
 | 🔎 | **Markdown 检索与出处** | 按章节、标签、别名和一跳双链查找资料；选择“知识综合”或“仅原文”，点击回答引用可定位原文；历史保留出处，原文变化会提示重新定位或核对 |
 | 🧮 | **共享绘制策略** | 密度、节点显示、标签与关系预算、稳定骨架和社区层级由一份规则产出；旧工具箱与早期 wash 模板已退休，Sigma 主路线与 DOM/SVG 故障回退使用同一份准备结果，每次更新只计算一次 |
 | 🧯 | **图谱故障恢复** | 共享结果失败时，工作台和离线图谱都会清掉旧内容并显示明确提示；只有 Sigma 自身故障才进入 DOM/SVG 回退，不会留下可操作的半成品 |
@@ -284,6 +285,21 @@ Hermes 会优先加载仓库根的 `HERMES.md` 作为项目上下文。这个文
 </details>
 
 ## Windows 用户
+
+### 工作台
+
+准备 Node.js `>=22.19.0`（版本以 `.nvmrc` 为准）、Git for Windows 和 Python 3。初始化工具仍使用已安装的 llm-wiki Skill；安装方法见下节。
+
+工作台会识别 Git Bash 的常见安装位置，不要求额外将 `bash.exe` 加入 PATH。自定义 Bash 位置沿用 pi 的 `shellPath` 设置。Windows 的“选择文件夹”使用系统目录对话框；取消后可以继续手动填写路径。
+
+```powershell
+npm ci
+npm run dev
+```
+
+库名会提前检查 Windows 保留设备名、非法字符和尾点。原生 Windows CI 覆盖包含空格的仓库路径、脚本初始化、入库、检索引用与浏览器流程；目录选择器验证 PowerShell 和 WinForms 调用，不在 CI 中弹窗。macOS 本机通过不能代替该 Windows 运行结果。
+
+### Skill 安装
 
 Windows PowerShell 5.1（Win10 / Win11 系统自带）默认 console 编码为 GB2312、`$OutputEncoding` 为 ASCII，Python 子进程 `sys.stdout.encoding` 默认为 `gbk`。直接在 PS 5.1 下运行 `bash install.sh` 会导致中文输出和 hook JSON 出现乱码（[#16](https://github.com/sdyckjq-lab/llm-wiki-skill/issues/16)）。
 

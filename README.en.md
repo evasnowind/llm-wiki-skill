@@ -10,7 +10,7 @@ Based on [Andrej Karpathy](https://karpathy.ai/)'s [llm-wiki methodology](https:
 
 Turn scattered information into a growing, interconnected knowledge base
 
-[![version](https://img.shields.io/badge/v3.6.93-Markdown%20Evidence-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.94-Windows%20Compatibility-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-multi--platform-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -90,6 +90,7 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 | | Feature | Description |
 |---|---|---|
 | 📥 | **Reliable Source Intake** | A persistent backend queue preserves originals, creates source summaries, and updates the index and log; refreshes, hidden panels, and knowledge-base switches do not cancel accepted work; cancellation, retry, restart recovery, and duplicate-input detection are included |
+| 🪟 | **Windows Workbench Compatibility** | Initialization and graph builds share Git Bash discovery and support Unicode/space paths; native folder selection, portable library names, and Windows workbench CI cover the key flows |
 | 🔎 | **Markdown Retrieval and Evidence** | Find sections through headings, tags, aliases, and one-hop wiki links; choose knowledge synthesis or sources-only answers, then open citations at their original location; history retains citations and changed files are relocated or flagged for review |
 | 🧭 | **Community Close-up Map** | Entering a community now feels like zooming into the same region from the global graph; positions, tiers, labels, and return highlights stay stable, then fade after the global view settles |
 | ⚠️ | **Graph Identity and Warnings** | Same-named pages stay separate by knowledge-base-relative path; ambiguous links, broken links, pending pages, and portable path conflicts are explained while the graph remains readable, with read-only paged details |
@@ -259,6 +260,21 @@ Requires `uv`. Install it, then re-run with `--with-optional-adapters`.
 </details>
 
 ## Windows Users
+
+### Workbench
+
+Install Node.js `>=22.19.0` (see `.nvmrc`), Git for Windows, and Python 3. Library initialization still uses the installed llm-wiki Skill; its installation is described below.
+
+The workbench discovers standard Git Bash installations without requiring `bash.exe` on PATH. Custom Bash locations use pi's existing `shellPath` setting. Folder selection uses the Windows system dialog; users can cancel and enter a path manually.
+
+```powershell
+npm ci
+npm run dev
+```
+
+Library names are checked for Windows device names, invalid characters, and trailing periods. Native Windows CI covers a checkout path containing spaces, script initialization, intake, evidence retrieval, and browser flows. Picker tests verify PowerShell and WinForms without opening a dialog. Passing macOS tests does not replace a native Windows run.
+
+### Skill Installation
 
 Windows PowerShell 5.1 (bundled with Win10 / Win11) defaults to GB2312 for console encoding, ASCII (CP1252) for `$OutputEncoding`, and `gbk` for Python subprocess `sys.stdout.encoding` on Chinese locale. Running `bash install.sh` directly under PowerShell 5.1 garbles Chinese output and hook JSON ([#16](https://github.com/sdyckjq-lab/llm-wiki-skill/issues/16)).
 
