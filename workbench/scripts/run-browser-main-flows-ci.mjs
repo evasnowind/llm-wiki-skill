@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { interruptedExitCode, runInvocation, sanitizeOutput } from "./run-quality-and-tests.mjs";
+import { npmInvocation } from "./npm-command.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const EVIDENCE_DIR = path.join(REPO_ROOT, ".tmp/browser-main-flows-ci");
@@ -22,7 +23,7 @@ const COMPONENT_LABELS = {
 export const BROWSER_CI_STAGES = {
 	"npm-dependencies": {
 		timeoutMs: 90_000,
-		invocation: { command: npmCommand(), args: ["ci"], cwd: REPO_ROOT },
+		invocation: { ...npmInvocation(["ci"]), cwd: REPO_ROOT },
 	},
 	"system-dependencies": {
 		timeoutMs: 8 * 60_000,
@@ -56,8 +57,7 @@ export const BROWSER_CI_STAGES = {
 		timeoutMs: 270_000,
 		invocations: [
 			{
-				command: npmCommand(),
-				args: ["run", "test:browser:main-flows", "-w", "@llm-wiki-agent/web"],
+				...npmInvocation(["run", "test:browser:main-flows", "-w", "@llm-wiki-agent/web"]),
 				cwd: REPO_ROOT,
 			},
 			{
@@ -213,6 +213,7 @@ function browserCiEnvironment(source = process.env) {
 		...(source.PLAYWRIGHT_BROWSERS_PATH
 			? { PLAYWRIGHT_BROWSERS_PATH: source.PLAYWRIGHT_BROWSERS_PATH }
 			: {}),
+		...Object.fromEntries(["SystemRoot", "ComSpec", "PATHEXT", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"].flatMap((name) => process.platform === "win32" && source[name] ? [[name, source[name]]] : [])),
 	};
 }
 
@@ -269,9 +270,6 @@ async function main() {
 	}
 }
 
-function npmCommand() {
-	return process.platform === "win32" ? "npm.cmd" : "npm";
-}
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {

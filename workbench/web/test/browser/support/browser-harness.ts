@@ -5,6 +5,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Browser, BrowserContext, BrowserServer } from "playwright";
@@ -133,7 +134,7 @@ export async function createNetworkGuardLaunch(probeFileBase: string): Promise<N
 
 export function networkGuardEnvironment(launch: NetworkGuardLaunch): NodeJS.ProcessEnv {
 	return {
-		NODE_OPTIONS: `--import=${NETWORK_GUARD}`,
+		NODE_OPTIONS: `--import=${pathToFileURL(NETWORK_GUARD).href}`,
 		LLM_WIKI_BROWSER_NETWORK_PROBE_FILE: launch.probeFile,
 		LLM_WIKI_BROWSER_NETWORK_PROBE_TARGET: "http://192.0.2.1:9",
 		LLM_WIKI_BROWSER_NETWORK_PROBE_GENERATION: launch.generation,
@@ -172,6 +173,7 @@ export function platformSandboxEnvironment(home: string): Record<string, string>
 		TEMP: join(home, "tmp"),
 		TMP: join(home, "tmp"),
 		...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+		...Object.fromEntries(["ComSpec", "PATHEXT", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"].flatMap((name) => process.env[name] ? [[name, process.env[name]]] : [])),
 	};
 }
 

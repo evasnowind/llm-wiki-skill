@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
+import { npmInvocation } from "../../../scripts/npm-command.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
 const TOTAL_TIMEOUT_MS = 120_000;
@@ -9,8 +10,7 @@ const STOP_TIMEOUT_MS = CLEANUP_BUDGET_MS / 2;
 
 const commands = [
 	{
-		command: npmCommand(),
-		args: ["run", "build", "-w", "@llm-wiki-agent/server"],
+		...npmInvocation(["run", "build", "-w", "@llm-wiki-agent/server"]),
 	},
 	{
 		command: process.execPath,
@@ -67,10 +67,6 @@ try {
 	clearTimeout(timer);
 	process.off("SIGINT", interruptHandler);
 	process.off("SIGTERM", terminateHandler);
-}
-
-function npmCommand(): string {
-	return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
 function minimalEnvironment(): NodeJS.ProcessEnv {

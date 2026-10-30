@@ -2,6 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmInvocation } from "../../../scripts/npm-command.mjs";
 
 import {
 	interruptedExitCode,
@@ -23,12 +24,12 @@ const environment = {
 	...(process.env.PLAYWRIGHT_BROWSERS_PATH
 		? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH }
 		: {}),
+	...Object.fromEntries(["SystemRoot", "ComSpec", "PATHEXT", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"].flatMap((name) => process.platform === "win32" && process.env[name] ? [[name, process.env[name]]] : [])),
 };
 
 const commands = [
 	{
-		command: npmCommand(),
-		args: ["run", "build", "-w", "@llm-wiki-agent/server"],
+		...npmInvocation(["run", "build", "-w", "@llm-wiki-agent/server"]),
 		cwd: REPO_ROOT,
 	},
 	{
@@ -107,8 +108,4 @@ try {
 } finally {
 	process.off("SIGINT", interruptHandler);
 	process.off("SIGTERM", terminateHandler);
-}
-
-function npmCommand() {
-	return process.platform === "win32" ? "npm.cmd" : "npm";
 }

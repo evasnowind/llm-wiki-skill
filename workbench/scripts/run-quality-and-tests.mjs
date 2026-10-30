@@ -81,6 +81,7 @@ export const QUALITY_STEPS = [
 				"--test",
 				"workbench/scripts/run-quality-and-tests.test.mjs",
 				"workbench/scripts/run-browser-main-flows-ci.test.mjs",
+				"workbench/scripts/platform-commands.test.mjs",
 			]),
 		],
 	},
@@ -225,7 +226,7 @@ export async function runInvocation(
 		env: {
 			...environment,
 			LLM_WIKI_QUALITY_PROCESS_REGISTRY: processRegistry,
-			NODE_OPTIONS: `--require=${PROCESS_REGISTRY_HOOK}`,
+			NODE_OPTIONS: [environment.NODE_OPTIONS, `--require=${JSON.stringify(PROCESS_REGISTRY_HOOK.replaceAll("\\", "/"))}`].filter(Boolean).join(" "),
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -481,6 +482,8 @@ function trackProcessTree(rootPid, processRegistry, readProcesses) {
 	timer.unref();
 	const liveProcesses = () => {
 		if (monitorError) throw monitorError;
+		// Windows cancellation is handled by taskkill /T; there is no POSIX process table.
+		if (process.platform === "win32") return [];
 		const currentByPid = new Map(readProcesses().map((entry) => [entry.pid, entry]));
 		return [...trackedProcesses.values()].filter((identity) =>
 			currentByPid.get(identity.pid)?.startedAt === identity.startedAt
