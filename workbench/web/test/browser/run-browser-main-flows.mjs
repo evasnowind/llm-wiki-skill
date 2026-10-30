@@ -34,7 +34,7 @@ const commands = [
 	},
 	{
 		command: process.execPath,
-		args: ["--import", "tsx", "--test", "workbench/web/test/browser/network-guard-restart.test.ts"],
+		args: ["--import", "tsx", "--test", "workbench/web/test/browser/network-guard-restart.test.ts", "workbench/web/test/browser/vite-readiness.test.ts"],
 		cwd: REPO_ROOT,
 	},
 	{

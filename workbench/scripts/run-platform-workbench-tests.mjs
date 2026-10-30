@@ -13,6 +13,7 @@ const NETWORK_GUARD = pathToFileURL(path.join(REPO_ROOT, "workbench/server/test/
 export const PLATFORM_BACKEND_TESTS = [
 	"workbench/scripts/platform-commands.test.mjs",
 	"workbench/scripts/check-workbench-boundaries.test.mjs",
+	"workbench/web/test/browser/vite-readiness.test.ts",
 	"workbench/server/src/platform/bash.test.ts",
 	"workbench/server/src/platform/directory-picker.test.ts",
 	"workbench/server/src/wiki-init.test.ts",

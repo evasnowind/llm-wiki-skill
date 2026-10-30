@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Browser, BrowserContext, BrowserServer } from "playwright";
@@ -218,7 +219,8 @@ export async function startProcess(command: string, args: string[], cwd: string,
 	child.stderr?.on("data", (chunk: string) => { output += chunk; });
 	const running = { child, output: () => output };
 	try {
-		await waitUntil(() => ready(output), START_TIMEOUT_MS, `${name} did not start`, child, running.output);
+		// Windows Vite colors Local separately from its colon, even through a pipe.
+		await waitUntil(() => ready(stripVTControlCharacters(output)), START_TIMEOUT_MS, `${name} did not start`, child, running.output);
 		return running;
 	} catch (error) {
 		signalProcessTree(child, "SIGKILL");
