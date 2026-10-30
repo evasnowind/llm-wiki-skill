@@ -23,6 +23,7 @@ import type {
 
 import { paginateGraphWarningContext, readGraphWarningContext } from "./graph-warnings.js";
 import { findRepoRoot } from "./repo-root.js";
+import { BASH_UNAVAILABLE_MESSAGE, BashUnavailableError, createBashScriptCommand, signalBashProcessTree, toBashPath } from "./platform/bash.js";
 
 const GRAPH_BUILD_STOP_TIMEOUT_MS = 1_000;
 const GRAPH_BUILD_ABORT_GRACE_MS = 100;
@@ -525,15 +526,17 @@ async function rebuildGraph(kbPath: string, signal: AbortSignal): Promise<void> 
 	const script = path.join(repoRoot, "scripts", "build-graph-data.sh");
 	await access(script);
 	signal.throwIfAborted();
+	const invocation = createBashScriptCommand(script, [toBashPath(kbPath)], { cwd: kbPath });
 	let child: ChildProcess;
 	const completion = new Promise<void>((resolve, reject) => {
 		child = spawn(
-			"bash",
-			[script, kbPath],
+			invocation.command,
+			invocation.args,
 			{
 				cwd: repoRoot,
 				detached: process.platform !== "win32",
-				env: process.env,
+				env: invocation.env,
+				windowsHide: true,
 				stdio: "ignore",
 			},
 		);
@@ -550,6 +553,7 @@ async function rebuildGraph(kbPath: string, signal: AbortSignal): Promise<void> 
 		await completion;
 	} finally {
 		signal.removeEventListener("abort", stopChild);
+		if (signal.aborted) signalGraphBuildTree(child!, "SIGKILL");
 		activeGraphBuilds.delete(child!);
 	}
 }
@@ -566,16 +570,11 @@ async function waitForGraphBuilds(children: ChildProcess[], timeoutMs: number): 
 }
 
 function signalGraphBuildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-	if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-	try {
-		if (process.platform === "win32") child.kill(signal);
-		else process.kill(-child.pid, signal);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-	}
+	signalBashProcessTree(child, signal);
 }
 
-export function graphRebuildFailureMessage(_err: unknown): string {
+export function graphRebuildFailureMessage(err: unknown): string {
+	if (err instanceof BashUnavailableError) return BASH_UNAVAILABLE_MESSAGE;
 	return "图谱重建失败";
 }
 

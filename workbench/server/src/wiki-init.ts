@@ -1,4 +1,3 @@
-import { execFile, type ExecFileOptions } from "node:child_process";
 import { constants } from "node:fs";
 import {
 	copyFile,
@@ -18,24 +17,7 @@ import path from "node:path";
 
 import { APP_DIR, DEFAULT_KNOWLEDGE_BASE_ROOT } from "./config.js";
 import { expandUserPath, registerExternalKnowledgeBase } from "./knowledge-bases.js";
-
-function execFileAsync(
-	file: string,
-	args: string[],
-	options: ExecFileOptions,
-): Promise<{ stdout: string; stderr: string }> {
-	return new Promise((resolve, reject) => {
-		execFile(file, args, options, (err, stdout, stderr) => {
-			const output = { stdout: stdout.toString(), stderr: stderr.toString() };
-			if (err) {
-				Object.assign(err, output);
-				reject(err);
-				return;
-			}
-			resolve(output);
-		});
-	});
-}
+import { executeBashScript, toBashPath } from "./platform/bash.js";
 
 export interface CreateWikiResult {
 	name: string;
@@ -111,6 +93,12 @@ export function validateWikiName(name: string): string {
 	}
 	if (trimmed.startsWith(".")) {
 		throw new KnowledgeBaseSetupInputError("知识库名不能以 . 开头");
+	}
+	if (/[<>:"|?*\u0000-\u001f\u007f]/u.test(trimmed) || /[ .]$/u.test(trimmed)) {
+		throw new KnowledgeBaseSetupInputError("知识库名含有系统不支持的字符，或以点号结尾");
+	}
+	if (/^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\s*\.|$)/iu.test(trimmed)) {
+		throw new KnowledgeBaseSetupInputError("知识库名不能使用 Windows 保留名称");
 	}
 	return trimmed;
 }
@@ -204,18 +192,10 @@ export async function createWiki(nameInput: string, purposeInput: string): Promi
 	return withWikiInitializationLock(targetPath, async () => {
 		const stagingPath = await createWikiStagingDirectory();
 		try {
-			const { stdout, stderr } = await execFileAsync(
-				scriptPath,
-				[stagingPath, purposeInput.trim() || name, "中文"],
-				{
-					timeout: 60_000,
-					env: {
-						HOME: homedir(),
-						PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
-					},
-					maxBuffer: 1024 * 1024,
-				},
-			);
+			const { stdout, stderr } = await executeBashScript(scriptPath, [toBashPath(stagingPath), purposeInput.trim() || name, "中文"], {
+				cwd: stagingPath, env: { HOME: homedir(), PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin" },
+				timeoutMs: 60_000, maxOutputBytes: 1024 * 1024,
+			});
 			await replaceGeneratedWikiRoot(stagingPath, targetPath);
 			await publishNewWiki(stagingPath, targetPath);
 			await rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);
@@ -246,7 +226,12 @@ async function replaceGeneratedWikiRoot(stagingPath: string, targetPath: string)
 }
 
 function replaceStagingPath(value: string, stagingPath: string, targetPath: string): string {
-	return value.replaceAll(stagingPath, targetPath);
+	const normalized = toBashPath(stagingPath);
+	const aliases = new Set([stagingPath, normalized]);
+	if (/^[A-Za-z]:\//u.test(normalized)) aliases.add(`/${normalized[0]!.toLowerCase()}${normalized.slice(2)}`);
+	let result = value;
+	for (const alias of aliases) result = result.replaceAll(alias, targetPath);
+	return result;
 }
 
 function replaceStagingPathInError(err: unknown, stagingPath: string, targetPath: string): void {
@@ -361,13 +346,9 @@ export async function initExistingWiki(
 			throw new KnowledgeBaseSetupRequiredError();
 		}
 
-		const { stdout, stderr } = await execFileAsync(scriptPath, [absolutePath, purpose, "中文"], {
-			timeout: 60_000,
-			env: {
-				HOME: homedir(),
-				PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
-			},
-			maxBuffer: 1024 * 1024,
+		const { stdout, stderr } = await executeBashScript(scriptPath, [toBashPath(absolutePath), purpose, "中文"], {
+			cwd: absolutePath, env: { HOME: homedir(), PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin" },
+			timeoutMs: 60_000, maxOutputBytes: 1024 * 1024,
 		});
 
 		await registerExternalKnowledgeBase(absolutePath);
