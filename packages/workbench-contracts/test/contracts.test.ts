@@ -375,6 +375,7 @@ test("prompt SSE schema 完整校验所有公开事件", () => {
 		{ ...base, seq: 7, type: "assistant_done" },
 		{ ...base, seq: 7, type: "assistant_cancelled", reason: "用户已停止" },
 		{ ...base, seq: 7, type: "assistant_error", code: "INTERNAL_ERROR", message: "生成过程中发生错误", details: { diagnosticId: "safe-id" } },
+		{ ...base, seq: 8, type: "assistant_evidence", mode: "sources-only", evidence: [] },
 	];
 
 	assert.equal(events.length, PROMPT_SSE_EVENT_TYPES.length);

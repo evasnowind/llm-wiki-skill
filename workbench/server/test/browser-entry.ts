@@ -174,6 +174,7 @@ function streamBrowserModel(model: Model<Api>, context: Context, options?: Strea
 	console.log(`[browser-test-model] ${FAKE_MODEL_MARKER}`);
 	const stream = createAssistantMessageEventStream();
 	queueMicrotask(async () => {
+		if (prompt.includes("[evidence]")) await appendFile(path.join(browserAppDir, "browser-evidence-contexts.jsonl"), `${JSON.stringify(context)}\n`);
 		if (prompt.includes("[model-error]")) {
 			await appendFile(modelErrorAttemptsFile, "attempt\n");
 			const failure = browserAssistantMessage(
@@ -215,7 +216,9 @@ function streamBrowserModel(model: Model<Api>, context: Context, options?: Strea
 			stream.end(aborted);
 			return;
 		}
-		const responseText = prompt.includes("[retrieval-owner]")
+		const responseText = prompt.includes("[evidence]")
+			? browserEvidenceReply(context, prompt)
+			: prompt.includes("[retrieval-owner]")
 			? `retrieval-owner:${retrievalOwner(context.systemPrompt)}`
 			: prompt.includes("[refs]")
 				? "请查看 [[wiki/entities/shared.md]]，也可打开 [[wiki/entities/missing.md]]。"
@@ -235,6 +238,22 @@ function streamBrowserModel(model: Model<Api>, context: Context, options?: Strea
 		stream.end(message);
 	});
 	return stream;
+}
+
+function browserEvidenceReply(context: Context, prompt: string): string {
+	const fullContext = `${context.systemPrompt ?? ""}\n${JSON.stringify(context.messages)}`;
+	let id = "";
+	// The fake provider selects only a citation that the real retrieval pipeline supplied.
+	const knowledgeMatch = context.systemPrompt?.match(/\[\d+\]\(#evidence-(E\d+)\)[^\n]*\n路径: raw\/handbook\.md\n/);
+	if (knowledgeMatch) id = knowledgeMatch[1]!;
+	if (!id) {
+		const jsonStart = prompt.indexOf('[{"id":');
+		if (jsonStart >= 0) {
+			try { id = (JSON.parse(prompt.slice(jsonStart)) as Array<{ id: string; path: string }>).find((item) => item.path === "raw/handbook.md")?.id ?? ""; } catch { /* no evidence supplied */ }
+		}
+	}
+	if (!id || !fullContext.includes("RAW_REFUND_48")) return "原文证据不足。";
+	return `原文规定退款在 48 小时内完成。[1](#evidence-${id})`;
 }
 
 function retrievalOwner(systemPrompt: string | undefined): "atlas" | "harbor" | "none" {

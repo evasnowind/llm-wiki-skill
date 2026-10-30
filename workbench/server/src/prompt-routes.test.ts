@@ -666,3 +666,36 @@ test("transport abort 只取消并清理所属 run，随后可立即开始新 pr
   assert.equal(calls.prompts.includes("第二次"), true);
   assertLifecycle(await readSse(res2));
 });
+
+test("explicit prompt scope rejects requests from a previous KB or conversation before starting a run", async () => {
+  const { service, calls } = createFakeService();
+  const app = createApp({ promptService: service });
+  for (const scope of [{ kbPath: "/fake/previous", conversationId: "c-1" }, { kbPath: "/fake/kb", conversationId: "previous-conversation" }]) {
+    const response = await app.request("/api/prompt", post({ message: "question", retrievalMode: "sources-only", ...scope }));
+    assert.equal(response.status, 400);
+    assert.equal((await json(response)).code, "INVALID_REQUEST");
+    assert.deepEqual(calls.begun, []);
+    assert.equal(calls.sessionSubscribed, 0);
+  }
+  const response = await app.request("/api/prompt", post({ message: "question", retrievalMode: "sources-only", kbPath: "/fake/kb", conversationId: "c-1" }));
+  assert.equal(response.status, 200);
+  assertLifecycle(await readSse(response));
+});
+
+test("tool searches assign new evidence ids without overwriting the initial evidence or prior searches", async () => {
+  const { registerSearchEvidence } = await import("./routes/prompt.js");
+  const first = { id: "E1", kind: "wiki" as const, path: "wiki/initial.md", title: "Initial", headingPath: [], startLine: 1, endLine: 1, fileHash: "a".repeat(64), excerptHash: "b".repeat(64), excerpt: "initial" };
+  const evidence = [first];
+  const search = (path: string) => {
+    const citation = { ...first, path, excerptHash: "c".repeat(64) };
+    return { evidence: [citation], results: [{ citation, path, title: "Additional", snippet: "additional", mtime: 1, hitReason: "body" as const, score: 1 }], missingExplicitRefs: [], totalSnippetChars: 10 };
+  };
+  const second = registerSearchEvidence(evidence, search("wiki/second.md"));
+  const third = registerSearchEvidence(evidence, search("wiki/third.md"));
+  const repeated = registerSearchEvidence(evidence, search("wiki/second.md"));
+  assert.equal(first.id, "E1");
+  assert.equal(second.results[0]?.citation?.id, "E2");
+  assert.equal(third.results[0]?.citation?.id, "E3");
+  assert.equal(repeated.results[0]?.citation?.id, "E2");
+  assert.deepEqual(evidence.map((item) => [item.id, item.path]), [["E1", "wiki/initial.md"], ["E2", "wiki/second.md"], ["E3", "wiki/third.md"]]);
+});

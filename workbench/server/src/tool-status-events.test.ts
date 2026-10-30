@@ -632,6 +632,7 @@ function assistantMessageEnd(
 
 function compactEvent(event: ToolStatusContractEvent): Record<string, unknown> {
 	const base = { type: event.type, seq: event.seq };
+	if (event.type === "assistant_evidence") return { ...base, mode: event.mode, evidence: event.evidence };
   if (event.type === "assistant_text_delta")
     return { ...base, delta: event.delta };
 	if (
@@ -668,3 +669,17 @@ function expectEvent<T extends ToolStatusContractEvent["type"]>(
 	assert.equal(event.type, type);
 	return event as Extract<ToolStatusContractEvent, { type: T }>;
 }
+
+test("assistant evidence shares the run sequence, snapshots its array and is blocked after terminal", () => {
+  const adapter = new ToolStatusEventAdapter({ runId: "run-evidence", messageId: "message-evidence" });
+  const citations: import("@llm-wiki/workbench-contracts").EvidenceCitation[] = [];
+  const evidence = adapter.assistantEvidence("sources-only", citations)!;
+  citations.push({ id: "E1", kind: "raw", path: "raw/a.md", title: "A", headingPath: [], startLine: 1, endLine: 1, fileHash: "a".repeat(64), excerptHash: "b".repeat(64), excerpt: "source" });
+  assert.deepEqual(evidence.evidence, []);
+  const delta = adapter.adapt(textDelta("answer"))[0]!;
+  const done = adapter.finishAssistant().at(-1)!;
+  assert.deepEqual([evidence.seq, delta.seq, done.seq], [1, 2, 3]);
+  assert.equal(evidence.runId, "run-evidence");
+  assert.equal(evidence.messageId, "message-evidence");
+  assert.equal(adapter.assistantEvidence("knowledge", []), null);
+});

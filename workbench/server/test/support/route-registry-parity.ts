@@ -54,6 +54,7 @@ const APPROVED_AUXILIARY_ENDPOINTS = new Map<string, ApprovedAuxiliaryEndpoint>(
  * check compares both sources instead of deriving one from the other.
  */
 export const RUNTIME_ENDPOINT_DECLARATIONS = [
+	{ method: "POST", path: "/api/evidence/read", kind: "migrated-json", safety: "read-only", source: "createApp" },
 	{ method: "GET", path: "/api/health", kind: "migrated-json", safety: "public", source: "createApp" },
 	{ method: "GET", path: "/api/events", kind: "sse", safety: "read-only", source: "createApp" },
 	{ method: "POST", path: "/api/prompt", kind: "sse", safety: "state-changing", source: "createApp" },

@@ -5,6 +5,7 @@ import { PromptSseEventSchema, type PromptSseEvent } from "@llm-wiki/workbench-c
 
 import { ApiError } from "../src/lib/api/client";
 import { parsePromptEvents, PromptProtocolError, streamPrompt } from "../src/lib/api/prompt";
+import { citation } from "./markdown-evidence-fixture";
 
 const originalFetch = globalThis.fetch;
 
@@ -13,6 +14,15 @@ afterEach(() => {
 });
 
 describe("prompt API client", () => {
+	it("sends the selected identity and mode, and validates scoped evidence before answer text", async () => {
+		const fixture = [event("assistant_evidence", 1, { mode: "sources-only", evidence: [citation] }), event("assistant_text_delta", 2, { delta: "[1](#evidence-E1)" }), event("assistant_done", 3)];
+		let body: unknown;
+		globalThis.fetch = (async (_input, init) => { body = JSON.parse(String(init?.body)); return new Response(sseStream(fixture)); }) as typeof fetch;
+		assert.deepEqual(await collect(await streamPrompt("question", undefined, { retrievalMode: "sources-only", kbPath: "/kb", conversationId: "conversation-1" })), fixture);
+		assert.deepEqual(body, { message: "question", retrievalMode: "sources-only", kbPath: "/kb", conversationId: "conversation-1" });
+		await assert.rejects(collect(parsePromptEvents(sseStream([event("assistant_done", 1), event("assistant_evidence", 2, { mode: "knowledge", evidence: [citation] })]))), PromptProtocolError);
+		await assert.rejects(collect(parsePromptEvents(sseStream([event("assistant_evidence", 1, { mode: "knowledge", evidence: [{ ...citation, fileHash: "invalid" }] }), event("assistant_done", 2)]))), PromptProtocolError);
+	});
 	it("returns typed events and validates the full fixture with the shared schema", async () => {
 		const fixture = [event("assistant_text_delta", 1, { delta: "部分" }), event("assistant_done", 2)];
 		for (const item of fixture) PromptSseEventSchema.parse(item);

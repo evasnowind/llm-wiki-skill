@@ -5,7 +5,8 @@ import type { MigratedJsonPath } from "@llm-wiki/workbench-contracts";
 
 import { ApiError, ContractMismatchError } from "../src/lib/api/client";
 import { getArtifactFileUrl, getArtifactManifest, listArtifacts } from "../src/lib/api/artifacts";
-import { listRefs, readPage } from "../src/lib/api/pages";
+import { listRefs, readEvidence, readPage } from "../src/lib/api/pages";
+import { citation } from "./markdown-evidence-fixture";
 
 const artifactId = "11111111-1111-4111-8111-111111111111";
 const manifest = {
@@ -39,6 +40,18 @@ function stubFetch(body: unknown, status = 200) {
 }
 
 describe("pages / artifacts API module", () => {
+	it("posts bound evidence in JSON and scopes original-source mention lookup", async () => {
+		const result = { path: citation.path, kind: "raw", content: "原始段落。", locationStatus: "exact", startLine: 5, endLine: 5, fileHash: citation.fileHash };
+		let calls = stubFetch({ ok: true, data: result });
+		const controller = new AbortController();
+		assert.deepEqual(await readEvidence("/kb/registered", citation, controller.signal), result);
+		assert.equal(calls[0]?.url, "/api/evidence/read");
+		assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { kbPath: "/kb/registered", citation });
+		assert.equal(calls[0]?.init?.signal, controller.signal);
+		calls = stubFetch({ ok: true, data: [] });
+		await listRefs("/kb/registered", "A", 20, "sources-only");
+		assert.match(calls[0]!.url, /retrievalMode=sources-only$/);
+	});
 	const originalFetch = globalThis.fetch;
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
