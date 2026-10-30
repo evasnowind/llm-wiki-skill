@@ -14,6 +14,12 @@ import { resolveKnowledgeBaseContext } from "./http/knowledge-base-context.js";
 import { HttpContractError } from "./http/request.js";
 import type { KnowledgeBaseRouteService } from "./routes/knowledge-bases.js";
 import { InitConflictError } from "./wiki-init.js";
+import { BashUnavailableError, BASH_UNAVAILABLE_MESSAGE } from "./platform/bash.js";
+import {
+	chooseSystemDirectory,
+	DIRECTORY_PICKER_FAILURE_MESSAGE,
+	DIRECTORY_PICKER_TIMEOUT_MESSAGE,
+} from "./platform/directory-picker.js";
 
 type EnvelopeJson = {
 	ok?: boolean;
@@ -579,4 +585,55 @@ test("目录选择保留取消，并将平台和内部失败收敛为稳定错�
 	const internal = await json(res);
 	assert.equal(internal.code, "INTERNAL_ERROR");
 	assert.equal(JSON.stringify(internal).includes("/Users/private"), false);
+});
+
+test("Windows directory selections preserve Unicode paths through the HTTP contract", async () => {
+	const { service, calls } = createFakeService();
+	const path = "C:\\共享 资料\\Alice's & $notes";
+	service.chooseDirectory = (signal) => chooseSystemDirectory({ platform: "win32", signal, run: async () => path });
+	const app = createApp({ knowledgeBaseService: service });
+	const response = await app.request("/api/system/choose-directory", { method: "POST" });
+	assert.equal(response.status, 200);
+	assert.deepEqual(await json(response), { ok: true, data: { path } });
+	assert.deepEqual(calls.registered, [], "choosing a directory does not register or initialize it");
+});
+
+test("directory picker process failures and timeouts expose only safe actionable messages", async () => {
+	for (const [code, message] of [["DIRECTORY_PICKER_FAILED", DIRECTORY_PICKER_FAILURE_MESSAGE], ["DIRECTORY_PICKER_TIMEOUT", DIRECTORY_PICKER_TIMEOUT_MESSAGE]]) {
+		const { service } = createFakeService();
+		service.chooseDirectory = async () => { throw Object.assign(new Error("C:\\private\\native-command key-secret"), { code }); };
+		const app = createApp({ knowledgeBaseService: service, mode: "test" });
+		const response = await app.request("/api/system/choose-directory", { method: "POST" });
+		assert.equal(response.status, 500);
+		const result = await json(response);
+		assert.equal(result.code, "INTERNAL_ERROR");
+		assert.equal(result.message, message);
+		assert.doesNotMatch(JSON.stringify(result), /private|key-secret|native-command/u);
+	}
+});
+
+test("aborted directory requests cancel their picker and do not return a late selection", async () => {
+	const { service } = createFakeService();
+	const controller = new AbortController();
+	let started!: () => void;
+	const ready = new Promise<void>((resolve) => { started = resolve; });
+	service.chooseDirectory = (signal) => chooseSystemDirectory({ platform: "win32", signal, run: (command) => new Promise((resolve) => {
+		assert.ok(command.options.signal);
+		command.options.signal.addEventListener("abort", () => resolve("C:\\late selection"), { once: true });
+		started();
+	}) });
+	const app = createApp({ knowledgeBaseService: service });
+	const response = app.request("/api/system/choose-directory", { method: "POST", signal: controller.signal });
+	await ready;
+	controller.abort();
+	assert.deepEqual(await json(await response), { ok: true, data: { path: null } });
+});
+
+test("Bash resolution failures retain their safe setup guidance at the knowledge-base route", async () => {
+	const { service } = createFakeService();
+	service.createKnowledgeBase = async () => { throw new BashUnavailableError(); };
+	const app = createApp({ knowledgeBaseService: service });
+	const response = await app.request("/api/knowledge-bases/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "研究笔记", purpose: "" }) });
+	assert.equal(response.status, 400);
+	assert.deepEqual(await json(response), { ok: false, code: "INVALID_REQUEST", message: BASH_UNAVAILABLE_MESSAGE });
 });

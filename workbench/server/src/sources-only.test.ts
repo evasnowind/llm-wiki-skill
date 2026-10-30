@@ -6,15 +6,12 @@ import test, { after } from "node:test";
 import { AuthStorage, ModelRegistry, SessionManager, SettingsManager, DefaultResourceLoader, createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type Context } from "@earendil-works/pi-ai";
 import type { EvidenceCitation, PromptSseEvent } from "@llm-wiki/workbench-contracts";
+import { isolateTestHome } from "../test/support/isolated-home.js";
 
 const sandbox = await mkdtemp(path.join(tmpdir(), "wiki-source-runtime-"));
-const originalHome = process.env.HOME;
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-process.env.HOME = sandbox;
-process.env.PI_CODING_AGENT_DIR = path.join(sandbox, "agent-config");
+const restoreHome = isolateTestHome(sandbox, path.join(sandbox, "agent-config"));
 after(async () => {
-  if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
-  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  restoreHome();
   await rm(sandbox, { recursive: true, force: true });
 });
 const { createSourcesOnlySession, buildSourcesOnlyQuestion, localSourcesOnlyAssistant, NO_SOURCE_EVIDENCE_REPLY } = await import("./sources-only.js");

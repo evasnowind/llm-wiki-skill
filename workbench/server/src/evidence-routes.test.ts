@@ -6,15 +6,12 @@ import path from "node:path";
 import test, { after } from "node:test";
 import type { EvidenceCitation } from "@llm-wiki/workbench-contracts";
 import { CAPABILITY_TOKEN_HEADER } from "@llm-wiki/workbench-contracts";
+import { isolateTestHome } from "../test/support/isolated-home.js";
 
 const sandbox = await mkdtemp(path.join(tmpdir(), "wiki-evidence-route-"));
-const oldHome = process.env.HOME;
-const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-process.env.HOME = sandbox;
-process.env.PI_CODING_AGENT_DIR = path.join(sandbox, "agent");
+const restoreHome = isolateTestHome(sandbox, path.join(sandbox, "agent"));
 after(async () => {
-  if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
-  if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  restoreHome();
   await rm(sandbox, { recursive: true, force: true });
 });
 const { createApp } = await import("./app.js");

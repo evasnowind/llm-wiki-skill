@@ -9,6 +9,7 @@ import test, { type TestContext } from "node:test";
 import type { IngestJob } from "@llm-wiki/workbench-contracts";
 
 import { createIngestQueue, type IngestQueueDeps, type IngestQueueService } from "./ingest/queue.js";
+import { createBashScriptCommand, toBashPath } from "./platform/bash.js";
 
 async function fixture(t: TestContext, overrides: Partial<IngestQueueDeps> = {}) {
 	const directory = await realpath(await mkdtemp(path.join(tmpdir(), "llm-wiki-ingest-")));
@@ -67,9 +68,14 @@ test("durable intake publishes a stable source, raw bytes and metadata; repeated
 	assert.equal((await service.enqueue({ kbPath: f.kb, filePaths: [f.source] })).id, done.id);
 	assert.equal(calls, 1);
 	for (const name of ["index.md", "log.md"]) assert.equal((await readFile(path.join(f.kb, name), "utf8")).split(`reliable-ingest:${file.id}`).length - 1, 1);
-	assert.equal((await stat(queuePath(f.root, f.kb))).mode & 0o777, 0o600);
+	const state = await stat(queuePath(f.root, f.kb));
+	assert.equal(state.isFile(), true);
+	// POSIX mode bits cannot express or prove the inherited Windows ACL.
+	if (process.platform !== "win32") assert.equal(state.mode & 0o777, 0o600);
+	const cacheSource = path.join(f.kb, rawPath);
+	const invocation = createBashScriptCommand(path.resolve("scripts/cache.sh"), ["check", toBashPath(cacheSource)], { cwd: f.kb });
 	const cacheOutput = await new Promise<string>((resolve, reject) => {
-		execFile("bash", [path.resolve("scripts/cache.sh"), "check", path.join(f.kb, rawPath)], { cwd: f.kb }, (error, stdout) => error ? reject(error) : resolve(stdout));
+		execFile(invocation.command, invocation.args, { cwd: f.kb, env: invocation.env }, (error, stdout) => error ? reject(error) : resolve(stdout));
 	});
 	assert.match(cacheOutput, /HIT/);
 });

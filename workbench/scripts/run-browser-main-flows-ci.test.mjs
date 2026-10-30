@@ -227,11 +227,11 @@ test("browser CI stages have separate commands and measured failure boundaries",
 			"browser-tests": 270_000,
 		},
 	);
-	assert.deepEqual(BROWSER_CI_STAGES["npm-dependencies"].invocation.args, ["ci"]);
+	assert.equal(BROWSER_CI_STAGES["npm-dependencies"].invocation.args.at(-1), "ci");
 	assert.deepEqual(BROWSER_CI_STAGES["system-dependencies"].invocation.args.slice(-2), ["install-deps", "chromium"]);
 	assert.deepEqual(BROWSER_CI_STAGES["browser-install"].invocation.args.slice(-2), ["install", "chromium"]);
 	assert.match(BROWSER_CI_STAGES["browser-verify"].invocation.args.at(-1), /chromium\.launch/);
-	assert.deepEqual(BROWSER_CI_STAGES["browser-tests"].invocations.map((item) => item.args), [
+	assert.deepEqual(BROWSER_CI_STAGES["browser-tests"].invocations.map((item) => item.command === process.execPath ? item.args.slice(1) : item.args), [
 		["run", "test:browser:main-flows", "-w", "@llm-wiki-agent/web"],
 		["tests/graph-offline-warnings.regression-1.sh"],
 	]);

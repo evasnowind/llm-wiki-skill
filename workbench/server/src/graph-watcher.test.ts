@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { GraphData, GraphLayoutFile } from "@llm-wiki/graph-engine";
+import { BashUnavailableError, BASH_UNAVAILABLE_MESSAGE } from "./platform/bash.js";
 
 import {
 	graphRebuildFailureMessage,
@@ -248,6 +249,7 @@ test("graph rebuild queue merges triggers into one pending rebuild while running
 });
 
 test("graph rebuild failure message is stable and does not expose build paths", () => {
+	assert.equal(graphRebuildFailureMessage(new BashUnavailableError()), BASH_UNAVAILABLE_MESSAGE);
 	assert.equal(
 		graphRebuildFailureMessage(new Error("spawn failed /Users/private/build.sh")),
 		"图谱重建失败",

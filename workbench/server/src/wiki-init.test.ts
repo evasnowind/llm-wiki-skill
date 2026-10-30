@@ -63,3 +63,12 @@ test("默认知识库名拒绝点号开头的目录", () => {
 			err.message === "知识库名不能以 . 开头",
 	);
 });
+
+test("knowledge base names reject Windows reserved devices and unsupported final directory names", () => {
+	for (const name of ["CON", "con.txt", "PRN", "AUX.backup", "NUL", "COM1", "COM9.md", "LPT1", "LPT9.txt", "COM¹", "COM².md", "COM³", "LPT¹", "LPT².log", "LPT³", "CON .txt", "bad:name", "bad?name", 'bad"name', "bad<name", "bad>name", "bad|name", "bad*name", "bad\u0000name", "bad\u001fname", "notes.", "notes.  "]) {
+		assert.throws(() => validateWikiName(name), (error) => error instanceof KnowledgeBaseSetupInputError, JSON.stringify(name));
+	}
+	for (const name of ["中文 研究", "notes.name", "COM0", "COM10", "LPT0", "LPT10", " my notes "]) {
+		assert.equal(validateWikiName(name), name.trim());
+	}
+});

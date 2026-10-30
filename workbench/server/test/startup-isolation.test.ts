@@ -106,6 +106,10 @@ sleep 30
 `,
 		);
 		await chmod(rebuildCommand, 0o755);
+		// Select the sandbox probe through the same explicit SDK setting as real users.
+		// Production Bash discovery intentionally prefers a known executable over PATH.
+		await mkdir(join(home, ".pi", "agent"), { recursive: true });
+		await writeFile(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ shellPath: rebuildCommand }) + "\n");
 		if (process.platform === "darwin") {
 			await writeFile(
 				childSandboxProfile,
