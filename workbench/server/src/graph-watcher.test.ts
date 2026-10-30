@@ -263,6 +263,18 @@ test("graph rebuild failure message is stable and does not expose build paths", 
 		"[graph] watching knowledge base for graph rebuilds",
 	);
 });
+
+test("internal rebuild failure callbacks retain causes without exposing them as public messages", async () => {
+	const cause = Object.assign(new Error("script failed"), { code: 1, stderr: "synthetic private script detail" });
+	let observed: unknown;
+	const queue = new GraphRebuildQueue({ run: async () => { throw cause; }, onError: (error) => {
+		assert.equal(graphRebuildFailureMessage(error), "图谱重建失败");
+	} });
+	queue.trigger({ onFailure: (error) => { observed = error; } });
+	await queue.waitForIdle();
+	assert.equal(observed, cause);
+	assert.doesNotMatch(graphRebuildFailureMessage(observed), /private script detail/);
+});
 test("graph rebuild queue recovers to started after a failed run", async () => {
 	let attempts = 0;
 	const errors: unknown[] = [];

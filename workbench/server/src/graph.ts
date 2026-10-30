@@ -188,7 +188,7 @@ function graphNodesHavePagePaths(nodes: GraphData["nodes"]): boolean {
 
 export function triggerGraphRebuild(
 	kbPath: string,
-	options: { onFailure?: () => void } = {},
+	options: { onFailure?: (error: unknown) => void } = {},
 ): { ok: true; status: GraphBuildStatus } {
 	let queue = rebuilds.get(kbPath);
 	if (!queue) {
@@ -397,11 +397,11 @@ export class GraphRebuildQueue {
 	private stopping = false;
 	private activeRun: AbortController | null = null;
 	private idleResolvers: Array<() => void> = [];
-	private failureCallbacks = new Set<() => void>();
+	private failureCallbacks = new Set<(error: unknown) => void>();
 
 	constructor(private readonly options: RebuildQueueOptions) {}
 
-	trigger(options: { onFailure?: () => void } = {}): { ok: true; status: GraphBuildStatus } {
+	trigger(options: { onFailure?: (error: unknown) => void } = {}): { ok: true; status: GraphBuildStatus } {
 		if (options.onFailure) this.failureCallbacks.add(options.onFailure);
 		if (this.running) {
 			this.pending = true;
@@ -435,7 +435,7 @@ export class GraphRebuildQueue {
 					if (!controller.signal.aborted) {
 						const callbacks = [...this.failureCallbacks];
 						this.failureCallbacks.clear();
-						for (const callback of callbacks) callback();
+						for (const callback of callbacks) callback(err);
 						this.options.onError(err);
 					}
 				} finally {
@@ -527,6 +527,10 @@ async function rebuildGraph(kbPath: string, signal: AbortSignal): Promise<void> 
 	await access(script);
 	signal.throwIfAborted();
 	const invocation = createBashScriptCommand(script, [toBashPath(kbPath)], { cwd: kbPath });
+	// Keep a bounded internal cause for explicit diagnostic callers. Public events
+	// and default logs must continue to use graphRebuildFailureMessage only.
+	const stderr: Buffer[] = [];
+	let stderrBytes = 0;
 	let child: ChildProcess;
 	const completion = new Promise<void>((resolve, reject) => {
 		child = spawn(
@@ -537,13 +541,20 @@ async function rebuildGraph(kbPath: string, signal: AbortSignal): Promise<void> 
 				detached: process.platform !== "win32",
 				env: invocation.env,
 				windowsHide: true,
-				stdio: "ignore",
+				stdio: ["ignore", "ignore", "pipe"],
 			},
 		);
+		child.stderr?.on("data", (chunk: Buffer) => {
+			const remaining = Math.max(0, 8_192 - stderrBytes);
+			if (remaining) stderr.push(chunk.subarray(0, remaining));
+			stderrBytes += chunk.length;
+		});
 		child.once("error", reject);
-		child.once("exit", (code, signal) => {
+		child.once("close", (code, signal) => {
 			if (code === 0) resolve();
-			else reject(new Error(`graph rebuild exited with ${signal ?? `code ${code}`}`));
+			else reject(Object.assign(new Error(`graph rebuild exited with ${signal ?? `code ${code}`}`), {
+				code, signal, stderr: Buffer.concat(stderr).toString("utf8"),
+			}));
 		});
 	});
 	const stopChild = () => signalGraphBuildTree(child, "SIGTERM");

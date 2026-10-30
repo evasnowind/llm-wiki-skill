@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -47,13 +47,15 @@ test("real init and graph scripts support isolated profiles, Unicode, spaces and
 		const graph = await import("./graph.js");
 		stopBuilds = graph.stopActiveGraphRebuilds;
 		await new Promise<void>((resolve, reject) => {
+			let cause: unknown;
 			const timer = setTimeout(() => reject(new Error("graph build did not finish")), 20_000);
 			unsubscribe = graph.subscribeGraphEvents((event) => {
 				if (event.kbPath !== created.path) return;
 				clearTimeout(timer);
-				if (event.type === "graph_updated") resolve(); else reject(new Error(event.message));
+				if (event.type === "graph_updated") resolve();
+				else reject(new Error(safeGraphFailure(event.message, cause, [home, repoRoot])));
 			});
-			graph.triggerGraphRebuild(created.path);
+			graph.triggerGraphRebuild(created.path, { onFailure: (error) => { cause = error; } });
 		});
 		const data = await graph.readGraphData(created.path);
 		assert.equal(data.needsBuild, false);
@@ -66,3 +68,57 @@ test("real init and graph scripts support isolated profiles, Unicode, spaces and
 		await rm(home, { recursive: true, force: true });
 	}
 });
+
+test("a real failed graph subprocess exposes diagnostics only to the internal callback", { timeout: 20_000 }, async () => {
+	const home = await mkdtemp(path.join(tmpdir(), "wiki graph diagnostic-"));
+	const restore = isolateTestHome(home);
+	let stopBuilds: (() => Promise<void>) | undefined;
+	let unsubscribe = () => {};
+	try {
+		const marker = "synthetic-private-graph-runtime";
+		const directory = path.join(home, marker);
+		await mkdir(directory);
+		// A real executable rejects Bash flags and prints its own path. This works
+		// without shebang/file associations on Windows and never runs user tools.
+		const rejectedShell = path.join(directory, process.platform === "win32" ? "bash.exe" : "bash");
+		await copyFile(process.execPath, rejectedShell);
+		await chmod(rejectedShell, 0o700);
+		await writeFile(path.join(home, ".pi", "agent", "settings.json"), JSON.stringify({ shellPath: rejectedShell }));
+		const graph = await import("./graph.js");
+		stopBuilds = graph.stopActiveGraphRebuilds;
+		let cause: unknown;
+		const event = await new Promise<Extract<import("./graph.js").GraphEvent, { type: "graph_error" }>>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("failure event was not delivered")), 10_000);
+			unsubscribe = graph.subscribeGraphEvents((event) => {
+				if (event.kbPath !== home) return;
+				clearTimeout(timer);
+				if (event.type === "graph_error") resolve(event); else reject(new Error("failed shell unexpectedly built a graph"));
+			});
+			graph.triggerGraphRebuild(home, { onFailure: (error) => { cause = error; } });
+		});
+		assert.equal(event.message, "图谱重建失败");
+		assert.doesNotMatch(JSON.stringify(event), new RegExp(marker));
+		assert.ok(cause && typeof cause === "object");
+		const detail = cause as { stderr?: string; code?: number };
+		assert.notEqual(detail.code, 0);
+		assert.match(detail.stderr ?? "", new RegExp(marker));
+		assert.ok(Buffer.byteLength(detail.stderr ?? "", "utf8") <= 8_192);
+	} finally {
+		unsubscribe();
+		await stopBuilds?.();
+		restore();
+		await rm(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+	}
+});
+
+function safeGraphFailure(message: string, cause: unknown, roots: string[]): string {
+	const detail = cause && typeof cause === "object" ? cause as { code?: unknown; signal?: unknown; stderr?: unknown } : {};
+	let text = `${message}; code=${String(detail.code ?? "unknown")}; signal=${String(detail.signal ?? "none")}\n${typeof detail.stderr === "string" ? detail.stderr : "No script stderr was available"}`;
+	for (const root of roots) {
+		const normalized = root.replaceAll("\\", "/");
+		const aliases = new Set([root, normalized]);
+		if (/^[A-Za-z]:\//u.test(normalized)) aliases.add(`/${normalized[0]!.toLowerCase()}${normalized.slice(2)}`);
+		for (const alias of aliases) text = text.replaceAll(alias, "<test-path>");
+	}
+	return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "").slice(0, 4_096);
+}
