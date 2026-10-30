@@ -44,14 +44,18 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Build the workbench and shared packages
+        id: build
         run: node workbench/scripts/run-platform-workbench-tests.mjs build --require-windows
       - name: Test native scripts, picker, names, queues and evidence
         timeout-minutes: 5
         run: node workbench/scripts/run-platform-workbench-tests.mjs backend --require-windows
       - name: Install the existing Playwright Chromium dependency
+        id: browser-install
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 4
         run: node node_modules/playwright/cli.js install chromium
       - name: Test intake and evidence in a real Windows browser
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browser-install.outcome == 'success' }}
         timeout-minutes: 5
         run: node workbench/scripts/run-platform-workbench-tests.mjs browser --require-windows
       - name: Upload sanitized native diagnostics
