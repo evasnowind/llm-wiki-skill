@@ -44,13 +44,7 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Build the workbench and shared packages
-        run: |
-          npm run build -w @llm-wiki-agent/server
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run build -w @llm-wiki-agent/web
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run typecheck
-          exit $LASTEXITCODE
+        run: node workbench/scripts/run-platform-workbench-tests.mjs build --require-windows
       - name: Test native scripts, picker, names, queues and evidence
         timeout-minutes: 5
         run: node workbench/scripts/run-platform-workbench-tests.mjs backend --require-windows
