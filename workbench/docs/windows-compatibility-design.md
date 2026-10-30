@@ -33,3 +33,5 @@ macOS 继续使用原有系统对话框。Windows 使用系统自带 PowerShell 
 - 隔离测试同时处理 HOME、USERPROFILE、APPDATA、LOCALAPPDATA 和 pi 配置目录；不得以修改系统 API 的方式伪造平台通过。
 - POSIX 权限断言只验证支持该语义的系统；Windows 验证实际读写和恢复行为，不能把 `0600` 视为 Windows ACL 的证明。
 - npm 子进程通过 Node 和 npm 的 JS 入口启动，避免在 Windows 中直接执行 `.cmd` 或使用任意 Shell 拼接。
+- 架构检查的文件身份使用统一的仓库相对路径，Windows 反斜杠不能使合法调用失去白名单，也不能让应拦截的调用绕过规则。
+- 原生 CI 的构建、后端和浏览器阶段保留有界、脱敏的失败诊断，支持从检查注释定位错误，不能只返回无法定位的退出码。

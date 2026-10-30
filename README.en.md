@@ -263,7 +263,7 @@ Requires `uv`. Install it, then re-run with `--with-optional-adapters`.
 
 ### Workbench
 
-Install Node.js `>=22.19.0` (see `.nvmrc`), Git for Windows, and Python 3. Library initialization still uses the installed llm-wiki Skill; its installation is described below.
+Install Node.js `>=22.19.0` (see `.nvmrc`), Git for Windows, Python 3, and `jq` for graph builds. Library initialization still uses the installed llm-wiki Skill; its installation is described below.
 
 The workbench discovers standard Git Bash installations without requiring `bash.exe` on PATH. Custom Bash locations use pi's existing `shellPath` setting. Folder selection uses the Windows system dialog; users can cancel and enter a path manually.
 
