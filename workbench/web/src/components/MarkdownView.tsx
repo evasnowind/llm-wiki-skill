@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { EvidenceCitation } from "@llm-wiki/workbench-contracts";
 
 import { emitWikiLinkSeen, extractWikiPageRefs, normalizeWikiLinks } from "../lib/wiki-links";
 
@@ -9,9 +10,12 @@ interface Props {
 	onOpenPage?: (path: string) => void;
 	onWikiLinkSeen?: (path: string) => void;
 	autoEmitWikiLinks?: boolean;
+	evidence?: EvidenceCitation[];
+	onOpenEvidence?: (citation: EvidenceCitation) => void;
+	highlightLines?: { startLine: number; endLine: number };
 }
 
-export function MarkdownView({ content, onOpenPage, onWikiLinkSeen, autoEmitWikiLinks = true }: Props) {
+export function MarkdownView({ content, onOpenPage, onWikiLinkSeen, autoEmitWikiLinks = true, evidence = [], onOpenEvidence, highlightLines }: Props) {
 	useEffect(() => {
 		if (!autoEmitWikiLinks || !onWikiLinkSeen) return;
 		for (const path of extractWikiPageRefs(content)) {
@@ -23,9 +27,15 @@ export function MarkdownView({ content, onOpenPage, onWikiLinkSeen, autoEmitWiki
 	return (
 		<div className="prose prose-invert max-w-none prose-pre:bg-background prose-pre:text-foreground prose-code:text-foreground">
 			<ReactMarkdown
-				remarkPlugins={[remarkGfm, remarkPaperHighlight]}
+				remarkPlugins={[remarkGfm, remarkPaperHighlight, [remarkSourceLocation, highlightLines]]}
 				components={{
 					a: ({ href, children }) => {
+						if (href?.startsWith("#evidence-")) {
+							const citation = evidence.find((item) => href === `#evidence-${item.id}`);
+							return citation && onOpenEvidence ? (
+								<button type="button" className="evidence-citation" title={`${citation.title} · ${citation.headingPath.join(" › ") || "正文"} · 第 ${citation.startLine}–${citation.endLine} 行`} aria-label={`查看出处 ${String(children)}：${citation.title}`} onClick={() => onOpenEvidence(citation)}>{children}</button>
+							) : <span className="evidence-unavailable" title="这条出处暂不可用">{children}</span>;
+						}
 						if (href?.startsWith("wiki/")) {
 							return (
 								<a
@@ -56,11 +66,28 @@ export function MarkdownView({ content, onOpenPage, onWikiLinkSeen, autoEmitWiki
 	);
 }
 
+/** Preserve source line numbers from Markdown, so evidence never relies on rendered text matching. */
+function remarkSourceLocation(range?: { startLine: number; endLine: number }) {
+	return (tree: MarkdownNode) => {
+		const visit = (node: MarkdownNode) => {
+			const start = node.position?.start.line;
+			const end = node.position?.end.line;
+			if (["paragraph", "heading", "code", "table", "thematicBreak"].includes(node.type ?? "") && start && end) {
+				const highlighted = Boolean(range && start <= range.endLine && end >= range.startLine);
+				node.data = { ...node.data, hProperties: { ...node.data?.hProperties, "data-source-start": start, "data-source-end": end, ...(highlighted ? { "data-evidence-highlight": "true", className: "evidence-highlight", tabIndex: -1 } : {}) } };
+			}
+			node.children?.forEach(visit);
+		};
+		visit(tree);
+	};
+}
+
 type MarkdownNode = {
+	position?: { start: { line: number }; end: { line: number } };
 	type?: string;
 	value?: string;
 	children?: MarkdownNode[];
-	data?: Record<string, unknown>;
+	data?: { hProperties?: Record<string, unknown>; [key: string]: unknown };
 };
 
 function remarkPaperHighlight() {

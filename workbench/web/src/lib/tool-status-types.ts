@@ -11,5 +11,5 @@ export interface ToolDisplay {
 
 export type ToolStatusContractEvent = Exclude<
 	PromptSseEvent,
-	{ type: "artifact_created" }
+	{ type: "artifact_created" | "assistant_evidence" }
 >;

@@ -56,10 +56,13 @@ import {
 	registerExternalKnowledgeBase,
 	selectKnowledgeBase,
 } from "@/lib/api/knowledge-bases";
-import { listRefs, readPage } from "@/lib/api/pages";
+import { listRefs, readEvidence, readPage } from "@/lib/api/pages";
 import {
 	artifactDrawer,
 	closedDrawer,
+	evidenceDrawer,
+	shouldApplyEvidenceResult,
+	type EvidenceSelection,
 	type DrawerState,
 	graphReaderDrawer,
 	isGraphInteractionDrawer,
@@ -209,6 +212,15 @@ function App() {
 	const renameRecoveryStatus = graphRenameRecovery.status;
 	const recheckGraphRenameRecovery = graphRenameRecovery.recheck;
 	const drawerRef = useRef<DrawerState>(closedDrawer());
+	const evidenceAbortRef = useRef<AbortController | null>(null);
+	const evidenceRequestRef = useRef(0);
+	const pageReadRequestRef = useRef(0);
+	const activeIdentityRef = useRef({ kbPath: active?.kb.path, conversationId: active?.conversation.id });
+	useEffect(() => {
+		activeIdentityRef.current = { kbPath: active?.kb.path, conversationId: active?.conversation.id };
+		evidenceAbortRef.current?.abort();
+		return () => evidenceAbortRef.current?.abort();
+	}, [active?.kb.path, active?.conversation.id]);
 	const activeConversationId = active?.conversation.id ?? null;
 	const graphPageReadRequestRef = useRef<(request: NonNullable<ActiveMapReadingWorkflowPlan["pageReadRequest"]>) => void>(() => {});
 	const graphConversationHandoffRef = useRef<(input: NonNullable<ActiveMapReadingWorkflowPlan["conversationHandoff"]>) => void>(() => {});
@@ -258,6 +270,7 @@ function App() {
 		reset: resetActiveMapReading,
 	} = activeMapReadingWorkflow;
 	const setDrawerWithRef = useCallback((next: DrawerState) => {
+		if (next.mode !== "evidence" || drawerRef.current.mode !== "evidence" || next.requestKey !== drawerRef.current.requestKey) evidenceAbortRef.current?.abort();
 		drawerRef.current = next;
 		setDrawer(next);
 	}, [setDrawer]);
@@ -270,6 +283,7 @@ function App() {
 	}, [setDrawer]);
 	useEffect(() => {
 		drawerRef.current = drawer;
+		if (drawer.mode !== "evidence") evidenceAbortRef.current?.abort();
 	}, [drawer]);
 
 	useEffect(() => {
@@ -465,6 +479,8 @@ function App() {
 	}, [activeConversationId, updateDrawerWithRef]);
 
 	const applyActive = (ctx: ActiveContext) => {
+		evidenceAbortRef.current?.abort();
+		activeIdentityRef.current = { kbPath: ctx.kb.path, conversationId: ctx.conversation.id };
 		setActive(ctx);
 		setInitialMessages(ctx.conversation.messages);
 		setChatKey((k) => k + 1);
@@ -584,6 +600,8 @@ function App() {
 	}, [active?.kb.path, graphRenameRecovery.renameBlocked, renameDialog]);
 
 	const handleCloseDrawer = useCallback((reason: "button" | "escape") => {
+		evidenceAbortRef.current?.abort();
+		if (drawerRef.current.mode === "evidence") drawerRef.current = closedDrawer();
 		runDrawerClose(reason);
 	}, [runDrawerClose]);
 
@@ -608,14 +626,36 @@ function App() {
 
 	const handleOpenPage = async (pagePath: string) => {
 		if (!active) return;
+		const requestId = ++pageReadRequestRef.current;
+		const kbPath = active.kb.path;
+		const conversationId = active.conversation.id;
 		const normalizedPagePath = toRelativePagePath(pagePath, active.kb.path) ?? pagePath;
+		const stillCurrent = () => pageReadRequestRef.current === requestId
+			&& activeIdentityRef.current.kbPath === kbPath && activeIdentityRef.current.conversationId === conversationId
+			&& drawerRef.current.mode === "wiki" && drawerRef.current.path === normalizedPagePath;
 		if (normalizedPagePath.startsWith("wiki/")) setGraphFocusPath(normalizedPagePath);
 		setDrawerWithRef(wikiDrawer(normalizedPagePath, { loading: true }));
 		try {
 			const content = await readPage(active.kb.path, normalizedPagePath);
-			setDrawerWithRef(wikiDrawer(normalizedPagePath, { content }));
+			if (stillCurrent()) setDrawerWithRef(wikiDrawer(normalizedPagePath, { content }));
 		} catch (err) {
-			setDrawerWithRef(wikiDrawer(normalizedPagePath, { error: err instanceof Error ? err.message : String(err) }));
+			if (stillCurrent()) setDrawerWithRef(wikiDrawer(normalizedPagePath, { error: err instanceof Error ? err.message : String(err) }));
+		}
+	};
+
+	const handleOpenEvidence = async (selection: EvidenceSelection) => {
+		const sameSelection = () => activeIdentityRef.current.kbPath === selection.kbPath && activeIdentityRef.current.conversationId === selection.conversationId;
+		if (!sameSelection()) return;
+		evidenceAbortRef.current?.abort();
+		const requestKey = `evidence-${++evidenceRequestRef.current}`;
+		setDrawerWithRef(evidenceDrawer(selection, requestKey, { loading: true }));
+		const controller = new AbortController();
+		evidenceAbortRef.current = controller;
+		try {
+			const result = await readEvidence(selection.kbPath, selection.citation, controller.signal);
+			if (!controller.signal.aborted && sameSelection()) updateDrawerWithRef((current) => shouldApplyEvidenceResult(current, selection, requestKey) ? evidenceDrawer(selection, requestKey, { result }) : current);
+		} catch (err) {
+			if (!controller.signal.aborted && sameSelection()) updateDrawerWithRef((current) => shouldApplyEvidenceResult(current, selection, requestKey) ? evidenceDrawer(selection, requestKey, { error: err instanceof Error ? err.message : String(err) }) : current);
 		}
 	};
 
@@ -861,6 +901,8 @@ function App() {
 									onMessageSent={handleMessageSent}
 									onStatusChange={setChatStatus}
 									currentKnowledgeBasePath={active?.kb.path ?? null}
+									conversationId={active?.conversation.id ?? null}
+									onOpenEvidence={handleOpenEvidence}
 									onOpenPage={handleOpenPage}
 									onWikiLinkSeen={handleWikiLinkSeen}
 									onArtifactCreated={handleArtifactCreated}

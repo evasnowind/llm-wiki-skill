@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Files, Send, Square, X } from "lucide-react";
-import type { CommandItem, PageRef, UIMessage } from "@llm-wiki/workbench-contracts";
+import type { CommandItem, EvidenceCitation, PageRef, RetrievalMode, UIMessage } from "@llm-wiki/workbench-contracts";
+import type { EvidenceSelection } from "../lib/drawer-state";
 
 import { CommandMenu } from "./CommandMenu";
 import { ExportButtons } from "./ExportButtons";
@@ -43,6 +44,8 @@ interface Message {
 	content: string;
 	tools: ToolMark[];
 	toolStatus?: ToolStatusState;
+	evidence?: EvidenceCitation[];
+	retrievalMode?: RetrievalMode;
 }
 
 function newId() {
@@ -56,6 +59,8 @@ function fromUIMessage(m: UIMessage): Message {
 		role: m.role,
 		content: m.content,
 		tools,
+		evidence: m.evidence,
+		retrievalMode: m.retrievalMode,
 		toolStatus: m.role === "assistant" ? createLegacyToolStatusState(m.id, tools) : undefined,
 	};
 }
@@ -77,10 +82,12 @@ interface Props {
 	hidden?: boolean;
 	currentKnowledgeBaseName: string | null;
 	currentKnowledgeBasePath: string | null;
+	conversationId?: string | null;
 	initialMessages: UIMessage[];
 	onMessageSent?: () => void;
 	onStatusChange?: (snapshot: ChatStatusSnapshot) => void;
 	onOpenPage?: (path: string) => void;
+	onOpenEvidence?: (selection: EvidenceSelection) => void;
 	onWikiLinkSeen?: (path: string) => void;
 	onArtifactCreated?: (id: string) => void;
 	artifactCount?: number;
@@ -108,10 +115,12 @@ export function ChatPanel({
 	hidden = false,
 	currentKnowledgeBaseName,
 	currentKnowledgeBasePath,
+	conversationId,
 	initialMessages,
 	onMessageSent,
 	onStatusChange,
 	onOpenPage,
+	onOpenEvidence,
 	onWikiLinkSeen,
 	onArtifactCreated,
 	artifactCount = 0,
@@ -124,6 +133,7 @@ export function ChatPanel({
 }: Props) {
 	const [messages, setMessages] = useState<Message[]>(() => initialMessages.map(fromUIMessage));
 	const [input, setInput] = useState("");
+	const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>("knowledge");
 	const [status, setStatus] = useState<"idle" | "streaming" | "error">("idle");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 	const [ingestDismissedFor, setIngestDismissedFor] = useState<string | null>(null);
@@ -249,7 +259,7 @@ export function ChatPanel({
 		}
 		let cancelled = false;
 		const timer = window.setTimeout(() => {
-			listRefs(currentKnowledgeBasePath, refMenu.query)
+			listRefs(currentKnowledgeBasePath, refMenu.query, 20, retrievalMode)
 				.then((items) => {
 					if (!cancelled) setRefs(items);
 				})
@@ -261,7 +271,7 @@ export function ChatPanel({
 			cancelled = true;
 			window.clearTimeout(timer);
 		};
-	}, [currentKnowledgeBasePath, refMenu.open, refMenu.query]);
+	}, [currentKnowledgeBasePath, refMenu.open, refMenu.query, retrievalMode]);
 
 	const updateMenus = (value: string, cursor: number) => {
 		const before = value.slice(0, cursor);
@@ -430,7 +440,7 @@ export function ChatPanel({
 		setIngestDismissedFor(null);
 		const userMsg: Message = { id: newId(), role: "user", content: visibleText, tools: [] };
 		const assistantId = newId();
-		const assistantMsg: Message = { id: assistantId, role: "assistant", content: "", tools: [] };
+		const assistantMsg: Message = { id: assistantId, role: "assistant", content: "", tools: [], retrievalMode };
 		followBottomRef.current = true;
 		setShowScrollToBottom(false);
 		setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -441,9 +451,12 @@ export function ChatPanel({
 		abortRef.current = controller;
 
 		try {
-			const stream = await streamPrompt(outgoingText, controller.signal);
+			const stream = await streamPrompt(outgoingText, controller.signal, currentKnowledgeBasePath && conversationId ? { retrievalMode, kbPath: currentKnowledgeBasePath, conversationId } : undefined);
 			for await (const event of stream) {
 				switch (event.type) {
+					case "assistant_evidence":
+						setMessages((prev) => prev.map((message) => message.id === assistantId ? { ...message, evidence: event.evidence, retrievalMode: event.mode } : message));
+						break;
 					case "assistant_text_delta":
 						setMessages((prev) =>
 							prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + event.delta } : m)),
@@ -635,6 +648,7 @@ export function ChatPanel({
 						showCursor={m.id === showCursorOn}
 						onOpenPage={onOpenPage}
 						onWikiLinkSeen={onWikiLinkSeen}
+						onOpenEvidence={currentKnowledgeBasePath && conversationId ? (citation) => onOpenEvidence?.({ kbPath: currentKnowledgeBasePath, conversationId, citation }) : undefined}
 					/>
 				))}
 			</div>
@@ -650,6 +664,12 @@ export function ChatPanel({
 				onDragOver={(event) => event.preventDefault()}
 				onDrop={handleDrop}
 			>
+					<fieldset className="retrieval-mode" disabled={status === "streaming" || !currentKnowledgeBaseName} aria-label="回答依据">
+						<legend className="sr-only">回答依据</legend>
+						{(["knowledge", "sources-only"] as const).map((mode) => <label key={mode} title={mode === "sources-only" ? "只依据已入库的原始资料回答，不使用整理页面或历史回答；资料不足时会说明。" : "结合知识页面与原始资料综合回答，并提供出处。"}>
+							<input type="radio" name="retrieval-mode" value={mode} checked={retrievalMode === mode} onChange={() => setRetrievalMode(mode)} />{mode === "knowledge" ? "知识综合" : "仅原文"}
+						</label>)}
+					</fieldset>
 				{showScrollToBottom && (
 					<div className="chat-scroll-bottom">
 						<button
@@ -792,11 +812,13 @@ function MessageBubble({
 	showCursor,
 	onOpenPage,
 	onWikiLinkSeen,
+	onOpenEvidence,
 }: {
 	message: Message;
 	showCursor: boolean;
 	onOpenPage?: (path: string) => void;
 	onWikiLinkSeen?: (path: string) => void;
+	onOpenEvidence?: (citation: EvidenceCitation) => void;
 }) {
 	const isUser = message.role === "user";
 	const showToolRunway = Boolean(
@@ -808,7 +830,7 @@ function MessageBubble({
 				{isUser ? "你" : "AI"}
 			</div>
 			<div className="msg-body">
-				<div className="msg-role">{isUser ? "你" : "llm-wiki"}</div>
+				<div className="msg-role">{isUser ? "你" : "llm-wiki"}{!isUser && message.retrievalMode && <span className="message-retrieval-mode">{message.retrievalMode === "sources-only" ? "仅原文" : "知识综合"}</span>}</div>
 				{message.toolStatus ? (
 					showToolRunway ? (
 						<ToolStatusRunway state={message.toolStatus} />
@@ -820,7 +842,7 @@ function MessageBubble({
 					{isUser ? (
 						<span className="whitespace-pre-wrap">{message.content}</span>
 					) : (
-						<MarkdownView content={message.content} onOpenPage={onOpenPage} onWikiLinkSeen={onWikiLinkSeen} />
+						<MarkdownView content={message.content} onOpenPage={onOpenPage} onWikiLinkSeen={onWikiLinkSeen} evidence={message.evidence} onOpenEvidence={onOpenEvidence} />
 					)}
 					{showCursor && <span className="animate-cursor-blink ml-0.5">▍</span>}
 				</div>

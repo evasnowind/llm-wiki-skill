@@ -3,6 +3,7 @@ import {
 	AssistantCancelledEventSchema,
 	AssistantDoneEventSchema,
 	AssistantErrorEventSchema,
+	AssistantEvidenceEventSchema,
 	FailureEnvelopeSchema,
 	PROMPT_SSE_EVENT_TYPES,
 	PROMPT_SSE_SCHEMA_VERSION,
@@ -13,6 +14,7 @@ import {
 	ToolStatusSummaryEventSchema,
 	ToolStatusUpdateEventSchema,
 	type PromptSseEvent,
+	type RetrievalMode,
 } from "@llm-wiki/workbench-contracts";
 
 import { parseSSE } from "../sse";
@@ -33,8 +35,9 @@ export class PromptProtocolError extends RecoverableSseProtocolError {
 export async function streamPrompt(
 	message: string,
 	signal?: AbortSignal,
+	context?: { retrievalMode: RetrievalMode; kbPath: string; conversationId: string },
 ): Promise<AsyncGenerator<PromptSseEvent, void, undefined>> {
-	const body = PromptRequestBodySchema.parse({ message });
+	const body = PromptRequestBodySchema.parse({ message, ...context });
 	const response = await fetch("/api/prompt", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -111,6 +114,8 @@ function promptEventSchema(type: Exclude<PromptSseEvent["type"], "assistant_text
 			return ToolStatusSummaryEventSchema;
 		case "artifact_created":
 			return ArtifactCreatedPromptEventSchema;
+		case "assistant_evidence":
+			return AssistantEvidenceEventSchema;
 		case "assistant_done":
 			return AssistantDoneEventSchema;
 		case "assistant_cancelled":

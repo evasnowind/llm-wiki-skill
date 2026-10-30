@@ -15,6 +15,7 @@ import {
 	GraphUnavailableObjectSummary,
 } from "./GraphSummaryDrawer";
 import { MarkdownView } from "./MarkdownView";
+import { EvidenceReader } from "./EvidenceReader";
 import type { DrawerState } from "../lib/drawer-state";
 import type { ArtifactManifest } from "@llm-wiki/workbench-contracts";
 import { getArtifactFileUrl } from "../lib/api/artifacts";
@@ -237,6 +238,7 @@ export function RightDrawer({
 				</div>
 			)}
 			<div className="drawer-content">
+				{drawer.mode === "evidence" && <EvidenceReader drawer={drawer} onOpenPage={onOpenPage} />}
 				{drawer.mode === "wiki" && (
 					<>
 						{drawer.loading && <div className="text-muted-foreground">加载中...</div>}
@@ -326,6 +328,7 @@ export function RightDrawer({
 }
 
 function drawerTitle(drawer: DrawerState, activeArtifact: ArtifactManifest | null): string {
+	if (drawer.mode === "evidence") return drawer.selection.citation.title;
 	if (drawer.mode === "wiki") return drawer.path ?? "页面";
 	if (drawer.mode === "graph-reader") return drawer.payload.node.title;
 	if (drawer.mode === "graph-selection") return "选区";

@@ -8,7 +8,13 @@ import type {
 	GraphUnavailableObjectPayload,
 	Selection,
 } from "@llm-wiki/graph-engine";
-import type { ArtifactManifest } from "@llm-wiki/workbench-contracts";
+import type { ArtifactManifest, EvidenceCitation, EvidenceReadResult } from "@llm-wiki/workbench-contracts";
+
+export interface EvidenceSelection {
+	kbPath: string;
+	conversationId: string;
+	citation: EvidenceCitation;
+}
 
 interface PageState {
 	content?: string;
@@ -18,6 +24,14 @@ interface PageState {
 
 export type DrawerState =
 	| { mode: "closed" }
+	| {
+			mode: "evidence";
+			selection: EvidenceSelection;
+			requestKey: string;
+			result: EvidenceReadResult | null;
+			loading: boolean;
+			error: string | null;
+		}
 	| {
 			mode: "wiki";
 			path: string | null;
@@ -90,6 +104,19 @@ export type DrawerState =
 
 export function closedDrawer(): DrawerState {
 	return { mode: "closed" };
+}
+
+export function evidenceDrawer(selection: EvidenceSelection, requestKey: string, state: { result?: EvidenceReadResult; loading?: boolean; error?: string } = {}): Extract<DrawerState, { mode: "evidence" }> {
+	return { mode: "evidence", selection, requestKey, result: state.result ?? null, loading: state.loading ?? false, error: state.error ?? null };
+}
+
+export function shouldApplyEvidenceResult(current: DrawerState, selection: EvidenceSelection, requestKey: string): current is Extract<DrawerState, { mode: "evidence" }> {
+	return current.mode === "evidence" && current.requestKey === requestKey
+		&& current.selection.kbPath === selection.kbPath
+		&& current.selection.conversationId === selection.conversationId
+		&& current.selection.citation.id === selection.citation.id
+		&& current.selection.citation.fileHash === selection.citation.fileHash
+		&& current.selection.citation.path === selection.citation.path;
 }
 
 export function wikiDrawer(path: string | null, state: PageState = {}): DrawerState {
