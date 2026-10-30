@@ -72,7 +72,8 @@ relative_path() {
 import os
 import sys
 
-print(os.path.relpath(os.path.realpath(sys.argv[2]), os.path.realpath(sys.argv[1])))
+sys.stdout.reconfigure(newline="\n")
+print(os.path.relpath(os.path.realpath(sys.argv[2]), os.path.realpath(sys.argv[1])).replace(os.sep, "/"))
 PY
 }
 
@@ -85,16 +86,21 @@ normalized_source_page() {
     return 0
   fi
 
-  case "$source_page" in
-    /*)
-      require_python_cmd
+  require_python_cmd
 
-      "$PYTHON_CMD" - "$wiki_root" "$source_page" <<'PY'
+  "$PYTHON_CMD" - "$wiki_root" "$source_page" <<'PY'
 import os
 import sys
 
+sys.stdout.reconfigure(newline="\n")
 wiki_root = os.path.realpath(sys.argv[1])
-source_page = os.path.realpath(sys.argv[2])
+source_page = sys.argv[2]
+
+if not os.path.isabs(source_page):
+    print(source_page.replace("\\", "/"))
+    raise SystemExit(0)
+
+source_page = os.path.realpath(source_page)
 
 try:
     common = os.path.commonpath([wiki_root, source_page])
@@ -102,15 +108,10 @@ except ValueError:
     common = ""
 
 if common == wiki_root:
-    print(os.path.relpath(source_page, wiki_root))
+    print(os.path.relpath(source_page, wiki_root).replace(os.sep, "/"))
 else:
-    print(sys.argv[2])
+    print(sys.argv[2].replace(os.sep, "/"))
 PY
-      ;;
-    *)
-      printf '%s\n' "$source_page"
-      ;;
-  esac
 }
 
 file_hash() {
@@ -121,6 +122,7 @@ import hashlib
 import pathlib
 import sys
 
+sys.stdout.reconfigure(newline="\n")
 relative_path = sys.argv[1].encode("utf-8")
 file_path = pathlib.Path(sys.argv[2])
 content = file_path.read_bytes()
@@ -159,12 +161,45 @@ import os
 import pathlib
 import sys
 
+sys.stdout.reconfigure(newline="\n")
 cache_file, wiki_root, relative_path, current_hash = sys.argv[1:5]
 
 with open(cache_file, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
 entry = data.get("entries", {}).get(relative_path)
+
+def save_cache():
+    tmp_file = cache_file + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.replace(tmp_file, cache_file)
+
+# Older native Windows versions used backslashes in both cache keys and hashes.
+# Migrate only after verifying the old identity hash and its existing source page.
+legacy_key = relative_path.replace("/", "\\")
+legacy_entry = data.get("entries", {}).get(legacy_key) if legacy_key != relative_path else None
+if not entry and isinstance(legacy_entry, dict):
+    legacy_hash = "sha256:" + hashlib.sha256(legacy_key.encode("utf-8") + b"\0" + pathlib.Path(os.path.join(wiki_root, relative_path)).read_bytes()).hexdigest()
+    if legacy_entry.get("hash") != legacy_hash:
+        print("MISS:hash_changed")
+        raise SystemExit(0)
+    source_page = legacy_entry.get("source_page")
+    if not isinstance(source_page, str) or not source_page:
+        print("MISS:no_entry")
+        raise SystemExit(0)
+    source_page = source_page.replace("\\", "/")
+    source_abs = source_page if os.path.isabs(source_page) else os.path.join(wiki_root, source_page)
+    if not os.path.isfile(source_abs):
+        print("MISS:no_source")
+        raise SystemExit(0)
+    entries = data.setdefault("entries", {})
+    entries[relative_path] = dict(legacy_entry, hash=current_hash, source_page=source_page)
+    del entries[legacy_key]
+    save_cache()
+    print("HIT(repaired)")
+    raise SystemExit(0)
 
 # 无 cache entry → 尝试自愈（exact filename stem match + source_path 验证）
 if not entry:
@@ -173,7 +208,7 @@ if not entry:
     if os.path.isdir(sources_dir):
         for f in os.listdir(sources_dir):
             if pathlib.Path(f).stem == raw_stem and f.endswith(".md"):
-                source_page = os.path.join("wiki", "sources", f)
+                source_page = "/".join(["wiki", "sources", f])
                 source_abs = os.path.join(wiki_root, source_page)
                 # 验证 source 页面的 source_path frontmatter 是否指向当前 raw 文件
                 source_path_match = False
@@ -188,7 +223,7 @@ if not entry:
                                 in_frontmatter = True
                                 continue
                             if in_frontmatter and stripped.startswith("source_path:"):
-                                fm_value = stripped.split(":", 1)[1].strip()
+                                fm_value = stripped.split(":", 1)[1].strip().replace("\\", "/")
                                 # 匹配相对路径的末尾部分
                                 if relative_path.endswith(fm_value) or fm_value.endswith(relative_path) or fm_value == relative_path:
                                     source_path_match = True
@@ -207,11 +242,7 @@ if not entry:
                     "ingested_at": timestamp,
                     "source_page": source_page,
                 }
-                tmp_file = cache_file + ".tmp"
-                with open(tmp_file, "w", encoding="utf-8") as fh2:
-                    json.dump(data, fh2, ensure_ascii=False, indent=2)
-                    fh2.write("\n")
-                os.replace(tmp_file, cache_file)
+                save_cache()
                 print("HIT(repaired)")
                 raise SystemExit(0)
     print("MISS:no_entry")
@@ -226,7 +257,7 @@ if not source_page:
     print("MISS:no_entry")
     raise SystemExit(0)
 
-source_path = source_page
+source_path = source_page.replace("\\", "/")
 if not os.path.isabs(source_path):
     source_path = os.path.join(wiki_root, source_path)
 
@@ -318,7 +349,9 @@ cache_file, relative_path = sys.argv[1:3]
 with open(cache_file, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
-data.setdefault("entries", {}).pop(relative_path, None)
+entries = data.setdefault("entries", {})
+entries.pop(relative_path, None)
+entries.pop(relative_path.replace("/", "\\"), None)
 
 tmp_file = cache_file + ".tmp"
 with open(tmp_file, "w", encoding="utf-8") as fh:
