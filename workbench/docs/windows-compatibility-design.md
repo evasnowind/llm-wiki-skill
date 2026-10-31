@@ -34,6 +34,7 @@ macOS 继续使用原有系统对话框。Windows 使用系统自带 PowerShell 
 - POSIX 权限断言只验证支持该语义的系统；Windows 验证实际读写和恢复行为，不能把 `0600` 视为 Windows ACL 的证明。
 - npm 子进程通过 Node 和 npm 的 JS 入口启动，避免在 Windows 中直接执行 `.cmd` 或使用任意 Shell 拼接。
 - 架构检查的文件身份使用统一的仓库相对路径，Windows 反斜杠不能使合法调用失去白名单，也不能让应拦截的调用绕过规则。
-- Git Bash 的挂载路径在进入原生 Node/jq 前转换为 Windows 物理路径，不能依赖带空格或引号参数的自动转换；Bash 自身文件操作保留 POSIX 路径。
+- Git Bash 的挂载路径在进入原生 Node 前转换为 Windows 物理路径，不能依赖带空格或引号参数的自动转换；Bash 自身文件操作保留 POSIX 路径。jq 的 JSON 文件由 Bash 通过标准输入提供，多份 JSON 使用流合并，避免 Unicode 文件名读取和 Windows 命令行长度限制。
+- 素材拖入与粘贴共用路径解析规则，保留 Unix 与 `~/` 输入，识别 Windows 绝对盘符路径、UNC 和 file URL；拒绝盘符相对路径及其他 URL 协议。
 - 原生 CI 的构建、后端和浏览器阶段保留有界、脱敏的失败诊断，支持从检查注释定位错误，不能只返回无法定位的退出码。
 - Windows 使用专用 build/backend/browser 验证入口；全仓 `quality-and-tests` 当前仍以 macOS/Linux 为基线，不能把这套原生专项验证表述为全仓工具链已完整支持 Windows。
