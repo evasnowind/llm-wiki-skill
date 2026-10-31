@@ -14,6 +14,7 @@ export const PLATFORM_BACKEND_TESTS = [
 	"workbench/scripts/platform-commands.test.mjs",
 	"workbench/scripts/check-workbench-boundaries.test.mjs",
 	"workbench/web/test/browser/vite-readiness.test.ts",
+	"workbench/web/test/dropped-path.test.ts",
 	"workbench/server/src/platform/bash.test.ts",
 	"workbench/server/src/platform/directory-picker.test.ts",
 	"workbench/server/src/wiki-init.test.ts",

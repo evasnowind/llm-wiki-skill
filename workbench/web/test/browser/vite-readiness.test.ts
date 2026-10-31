@@ -38,7 +38,7 @@ test("guarded Vite readiness accepts its native Windows colored Local label", { 
 		"colored Vite frontend",
 		join(home, "vite-network-probe"),
 	);
-	assert.match(running.output(), /\u001b\[1mLocal\u001b\[22m:/u, "exercise the actual ANSI sequence that splits the readiness label");
+	assert.ok(running.output().includes("\u001b[1mLocal\u001b[22m:"), "exercise the actual ANSI sequence that splits the readiness label");
 	assert.doesNotMatch(running.output(), /Local:/u, "raw logs retain their original diagnostic content");
 	const response = await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(OPERATION_TIMEOUT_MS) });
 	assert.equal(response.status, 200);
