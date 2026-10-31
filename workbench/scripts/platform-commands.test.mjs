@@ -57,7 +57,9 @@ test("platform suite isolates every home location, drops credentials and only pr
 	assert.doesNotMatch(environment.NODE_OPTIONS, /untrusted/);
 	assert.ok(PLATFORM_BACKEND_TESTS.includes("workbench/server/src/ingest-queue.test.ts"));
 	assert.ok(PLATFORM_BACKEND_TESTS.includes("workbench/server/src/sources-only.test.ts"));
-	assert.deepEqual(PLATFORM_BROWSER_TESTS.map((file) => path.basename(file)), ["reliable-ingest.test.ts", "markdown-evidence.test.ts"]);
+	assert.ok(PLATFORM_BACKEND_TESTS.includes("workbench/server/src/source-revisions.test.ts"));
+	assert.ok(PLATFORM_BACKEND_TESTS.includes("workbench/server/src/ingest/revision-generator.test.ts"));
+	assert.deepEqual(PLATFORM_BROWSER_TESTS.map((file) => path.basename(file)), ["reliable-ingest.test.ts", "markdown-evidence.test.ts", "source-revisions.test.ts"]);
 });
 
 test("process runner preserves an explicit guard preload and handles a preload path containing spaces", async (t) => {

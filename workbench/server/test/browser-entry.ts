@@ -132,6 +132,20 @@ const browserIngestQueue = createIngestQueue({
 	root: path.join(browserAppDir, "browser-ingest"),
 	assertRegisteredKnowledgeBase,
 	validateSources: validateInspectedSourceFiles,
+	resolveRevisionModel: async () => ({ provider: FAUX_PROVIDER, modelId: FAUX_MODEL }),
+	generateRevision: async (input) => {
+		await appendFile(path.join(browserAppDir, "browser-revision-events.jsonl"), `${JSON.stringify({ event: "generate", name: input.name, feedback: input.feedback ?? "" })}\n`);
+		input.onProgress?.(30);
+		if (input.feedback?.includes("[revision-fail]") && existsSync(path.join(browserAppDir, "browser-revision-fail"))) {
+			throw new Error("controlled revision fixture failure");
+		}
+		while (input.feedback?.includes("[revision-hold]") && !existsSync(path.join(browserAppDir, "browser-revision-release"))) {
+			if (input.signal.aborted && !input.feedback.includes("[ignore-cancel]")) throw new DOMException("Aborted", "AbortError");
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		if (input.signal.aborted && !input.feedback?.includes("[ignore-cancel]")) throw new DOMException("Aborted", "AbortError");
+		return `# 浏览器候选摘要\n\n${input.text}\n\n摘要要求：${input.feedback ?? "默认"}\n`;
+	},
 	generate: async (input, progress, signal) => {
 		const content = await readFile(input.filePath, "utf8");
 		await appendFile(path.join(browserAppDir, "browser-ingest-events.jsonl"), `${JSON.stringify({ kbPath: input.kbPath, event: "generate" })}\n`);

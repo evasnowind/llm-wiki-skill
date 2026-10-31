@@ -4,7 +4,8 @@ import React from "react";
 import type { IngestJob } from "@llm-wiki/workbench-contracts";
 
 import { IngestQueuePanel } from "../src/components/IngestQueuePanel";
-import { click, render, screen } from "./render";
+import { data, fakeApi } from "./source-revisions-fixtures";
+import { click, render, screen, waitFor } from "./render";
 
 describe("reliable ingest Paper panel", () => {
 	it("shows per-file outcomes and invokes only explicit cancel or retry actions", async () => {
@@ -29,6 +30,35 @@ describe("reliable ingest Paper panel", () => {
 		assert.deepEqual(calls.slice(2), [`cancel:${job.id}`, `retry:${job.id}`]);
 	});
 
+	it("expands only while reading candidate or version details, then restores normal queue sizing", async () => {
+		const originalFetch = globalThis.fetch;
+		const api = fakeApi();
+		globalThis.fetch = async (input) => {
+			const url = String(input);
+			const result = url.includes("/detail") ? await api.detail("/a", "candidate")
+				: url.includes("/sources/") ? await api.history("/a", "source")
+				: url.includes("/models") ? [] : url.includes("/config") ? { version: 1, externalKnowledgeBases: [] } : data();
+			return Response.json({ ok: true, data: result });
+		};
+		const props = {
+			kbPath: "/a", knowledgeBaseName: "A", jobs: [], loading: false, error: null, actionError: null, pendingIds: [],
+			onClose() {}, onRefresh() {}, onCancel() {}, onRetry() {}, onOpenOutput() {},
+		};
+		try {
+			const view = render(<IngestQueuePanel {...props} open />);
+			await waitFor(() => assert.ok(screen.getByRole("button", { name: "查看对照" })));
+			assert.doesNotMatch(screen.getByLabelText("入库任务").className, /ingest-panel-reading/);
+			await click(screen.getByRole("button", { name: "查看对照" }));
+			await waitFor(() => assert.match(screen.getByLabelText("入库任务").className, /ingest-panel-reading/));
+			await click(screen.getByRole("button", { name: "关闭版本详情" }));
+			await waitFor(() => assert.doesNotMatch(screen.getByLabelText("入库任务").className, /ingest-panel-reading/));
+			await click(screen.getByRole("button", { name: "版本历史", exact: true }));
+			await waitFor(() => assert.match(screen.getByLabelText("入库任务").className, /ingest-panel-reading/));
+			view.rerender(<IngestQueuePanel {...props} open={false} />);
+			view.rerender(<IngestQueuePanel {...props} open />);
+			assert.doesNotMatch(screen.getByLabelText("入库任务").className, /ingest-panel-reading/);
+		} finally { globalThis.fetch = originalFetch; }
+	});
 	it("hides without cancelling and keeps network errors separate from task failure", () => {
 		const job = fixture();
 		const props = {

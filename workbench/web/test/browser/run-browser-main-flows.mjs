@@ -53,6 +53,11 @@ const commands = [
 		cwd: REPO_ROOT,
 	},
 	{
+		command: process.execPath,
+		args: ["--import", "tsx", "--test", "workbench/web/test/browser/source-revisions.test.ts"],
+		cwd: REPO_ROOT,
+	},
+	{
 		command: "bash",
 		args: ["tests/graph-host-errors.regression-1.sh"],
 		cwd: REPO_ROOT,

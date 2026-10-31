@@ -15,6 +15,8 @@ export const PLATFORM_BACKEND_TESTS = [
 	"workbench/scripts/check-workbench-boundaries.test.mjs",
 	"workbench/web/test/browser/vite-readiness.test.ts",
 	"workbench/web/test/dropped-path.test.ts",
+	"packages/workbench-contracts/test/source-revisions.test.ts",
+	"workbench/web/test/source-revision-diff.test.ts",
 	"workbench/server/src/platform/bash.test.ts",
 	"workbench/server/src/platform/directory-picker.test.ts",
 	"workbench/server/src/wiki-init.test.ts",
@@ -23,6 +25,8 @@ export const PLATFORM_BACKEND_TESTS = [
 	"workbench/server/src/graph.test.ts",
 	"workbench/server/src/graph-rename-portability.test.ts",
 	"workbench/server/src/ingest-queue.test.ts",
+	"workbench/server/src/source-revisions.test.ts",
+	"workbench/server/src/ingest/revision-generator.test.ts",
 	"workbench/server/src/cache-portability.test.ts",
 	"workbench/server/src/retrieval.test.ts",
 	"workbench/server/src/markdown-retrieval.test.ts",
@@ -46,6 +50,7 @@ export function platformBuildSteps(commandOptions) {
 export const PLATFORM_BROWSER_TESTS = [
 	"workbench/web/test/browser/reliable-ingest.test.ts",
 	"workbench/web/test/browser/markdown-evidence.test.ts",
+	"workbench/web/test/browser/source-revisions.test.ts",
 ];
 
 /** Deliberately does not inherit provider keys, registry credentials or user Node hooks. */

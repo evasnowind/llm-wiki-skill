@@ -54,6 +54,15 @@ const APPROVED_AUXILIARY_ENDPOINTS = new Map<string, ApprovedAuxiliaryEndpoint>(
  * check compares both sources instead of deriving one from the other.
  */
 export const RUNTIME_ENDPOINT_DECLARATIONS = [
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/check", kind: "migrated-json", safety: "state-changing", source: "createApp" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions", kind: "migrated-json", safety: "read-only", source: "createApp" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates", kind: "migrated-json", safety: "state-changing", source: "createApp" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/candidates/:id/detail", kind: "migrated-json", safety: "read-only", source: "createApp" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/adopt", kind: "migrated-json", safety: "state-changing", source: "createApp" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/cancel", kind: "migrated-json", safety: "state-changing", source: "createApp" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/retry", kind: "migrated-json", safety: "state-changing", source: "createApp" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/sources/:sourceId", kind: "migrated-json", safety: "read-only", source: "createApp" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/versions/:versionId", kind: "migrated-json", safety: "read-only", source: "createApp" },
 	{ method: "POST", path: "/api/evidence/read", kind: "migrated-json", safety: "read-only", source: "createApp" },
 	{ method: "GET", path: "/api/health", kind: "migrated-json", safety: "public", source: "createApp" },
 	{ method: "GET", path: "/api/events", kind: "sse", safety: "read-only", source: "createApp" },
