@@ -48,6 +48,7 @@
 - [ADR-32 一个图谱引擎，两个宿主（repo-wide 摘要，细节以 ADR-21 为准）](./0032-one-graph-engine-two-hosts.md)
 - [ADR-33 工作台可靠入库与 Skill 完整整理的边界](./0033-workbench-reliable-source-intake.md)
 - [ADR-34 原文证据隔离与逐轮引用身份](./0034-markdown-evidence-isolation.md)
+- [ADR-35 受控素材更新与摘要候选](./0035-reviewed-source-revisions.md)
 
 ## When To Add One
 
