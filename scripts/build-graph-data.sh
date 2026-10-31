@@ -8,7 +8,7 @@
 # basename, and owns graph-warnings.json in the same existing directory.
 # Exit codes: 0 = valid graph produced (including data warnings); 1 = tool/input failure.
 
-set -eu
+set -euo pipefail
 
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" = "${BASH_SOURCE[0]}" ] && SCRIPT_DIR="."
@@ -158,7 +158,10 @@ fi
 [ -n "$WIKI_TITLE" ] || WIKI_TITLE="$(basename "$WIKI_ROOT")"
 WIKI_TITLE="${WIKI_TITLE%$'\r'}"
 
-TOTAL_SIZE="$(native_command jq -r '.graph_source_bytes // 0' "$NATIVE_SCAN_DIR/scan-metrics.json")"
+# Let Bash open JSON files: native Windows jq may not open Unicode paths
+# consistently through its file/--slurpfile entry points. stdin also keeps large
+# graph payloads out of argv and its Windows command-line length limit.
+TOTAL_SIZE="$(native_command jq -r '.graph_source_bytes // 0' < "$SCAN_DIR/scan-metrics.json")"
 TOTAL_SIZE="${TOTAL_SIZE%$'\r'}"
 DEGRADE=0
 if [ "$TOTAL_SIZE" -gt "$MAX_CONTENT_BYTES" ]; then
@@ -183,26 +186,26 @@ native_command jq -e '
   (.edges | type) == "array" and
   (.insights | type) == "object" and
   (.learning | type) == "object"
-' "$NATIVE_TMPDIR/analysis.json" > /dev/null 2>&1 || {
+' < "$ANALYSIS_JSON" > /dev/null 2>&1 || {
   echo "ERROR: graph analysis helper returned invalid JSON: $ANALYSIS_JSON" >&2
   exit 1
 }
 
 if [ "${LLM_WIKI_TEST_MODE:-0}" = "1" ]; then
-  native_command jq '.nodes | sort_by(.id)' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/nodes.sorted.json"
+  native_command jq '.nodes | sort_by(.id)' < "$ANALYSIS_JSON" > "$TMPDIR/nodes.sorted.json"
   native_command jq '.edges | sort_by(.from, .to, .relation_type, .type)
       | to_entries
       | map(.value + {id: ("e" + ((.key + 1) | tostring))})' \
-    "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/edges.sorted.json"
+    < "$ANALYSIS_JSON" > "$TMPDIR/edges.sorted.json"
 else
-  native_command jq '.nodes' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/nodes.sorted.json"
-  native_command jq '.edges' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/edges.sorted.json"
+  native_command jq '.nodes' < "$ANALYSIS_JSON" > "$TMPDIR/nodes.sorted.json"
+  native_command jq '.edges' < "$ANALYSIS_JSON" > "$TMPDIR/edges.sorted.json"
 fi
 
 INITIAL_VIEW="$TMPDIR/initial-view.json"
-native_command jq --slurpfile nodes "$NATIVE_TMPDIR/nodes.sorted.json" '
-  . as $edges
-  | ($nodes[0]) as $node_rows
+cat "$TMPDIR/nodes.sorted.json" "$TMPDIR/edges.sorted.json" | native_command jq -s '
+  .[0] as $node_rows
+  | .[1] as $edges
   | (reduce $edges[] as $edge ({};
       .[$edge.from] = (.[$edge.from] // 0) + 1
       | .[$edge.to] = (.[$edge.to] // 0) + 1
@@ -214,41 +217,37 @@ native_command jq --slurpfile nodes "$NATIVE_TMPDIR/nodes.sorted.json" '
       | map(.id)
       | map(select(. as $id | $representatives | index($id) | not))) as $rest
   | ($representatives + $rest)[0:30]
-' "$NATIVE_TMPDIR/edges.sorted.json" > "$INITIAL_VIEW"
+' > "$INITIAL_VIEW"
 
-NODE_COUNT="$(native_command jq 'length' "$NATIVE_TMPDIR/nodes.sorted.json")"
-EDGE_COUNT="$(native_command jq 'length' "$NATIVE_TMPDIR/edges.sorted.json")"
-INSIGHTS_DEGRADED="$(native_command jq '.insights.meta.degraded == true' "$NATIVE_TMPDIR/analysis.json")"
+NODE_COUNT="$(native_command jq 'length' < "$TMPDIR/nodes.sorted.json")"
+EDGE_COUNT="$(native_command jq 'length' < "$TMPDIR/edges.sorted.json")"
+INSIGHTS_DEGRADED="$(native_command jq '.insights.meta.degraded == true' < "$ANALYSIS_JSON")"
 NODE_COUNT="${NODE_COUNT%$'\r'}"
 EDGE_COUNT="${EDGE_COUNT%$'\r'}"
 INSIGHTS_DEGRADED="${INSIGHTS_DEGRADED%$'\r'}"
 
 GRAPH_INPUT="$TMPDIR/graph-data.json"
-native_command jq -n \
+cat "$INITIAL_VIEW" "$TMPDIR/nodes.sorted.json" "$TMPDIR/edges.sorted.json" "$ANALYSIS_JSON" | native_command jq -s \
   --arg build_date "$BUILD_DATE" \
   --arg wiki_title "$WIKI_TITLE" \
   --argjson total_nodes "$NODE_COUNT" \
   --argjson total_edges "$EDGE_COUNT" \
-  --slurpfile initial_view "$NATIVE_TMPDIR/initial-view.json" \
-  --slurpfile nodes "$NATIVE_TMPDIR/nodes.sorted.json" \
-  --slurpfile edges "$NATIVE_TMPDIR/edges.sorted.json" \
-  --slurpfile analysis "$NATIVE_TMPDIR/analysis.json" \
   --argjson degraded "$DEGRADE" \
   --argjson insights_degraded "$INSIGHTS_DEGRADED" \
-  '{
+  '.[0] as $initial_view | .[1] as $nodes | .[2] as $edges | .[3] as $analysis | {
     meta: {
       build_date: $build_date,
       wiki_title: $wiki_title,
       total_nodes: $total_nodes,
       total_edges: $total_edges,
-      initial_view: $initial_view[0],
+      initial_view: $initial_view,
       degraded: ($degraded == 1),
       insights_degraded: $insights_degraded
     },
-    nodes: $nodes[0],
-    edges: $edges[0],
-    insights: $analysis[0].insights,
-    learning: $analysis[0].learning
+    nodes: $nodes,
+    edges: $edges,
+    insights: $analysis.insights,
+    learning: $analysis.learning
   }' > "$GRAPH_INPUT"
 
 if ! native_command node "$NATIVE_CLI" commit-pair \
