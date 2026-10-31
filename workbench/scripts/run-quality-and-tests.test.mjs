@@ -85,6 +85,7 @@ test("quality entrypoint covers every required check in a stable sequence", () =
 		"tests/js/graph-warning-bundle.test.js",
 		"tests/js/wiki-link-performance.test.js",
 		"tests/graph-path-identity-build.regression-1.sh",
+		"tests/graph-native-paths.regression-1.sh",
 		"tests/graph-warning-exit-codes.regression-1.sh",
 	]);
 	const graphBuildArgs = QUALITY_STEPS.find((step) => step.id === "build-graph").commands.flatMap((item) => item.args);
