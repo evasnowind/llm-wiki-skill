@@ -265,7 +265,7 @@ Requires `uv`. Install it, then re-run with `--with-optional-adapters`.
 
 Install Node.js `>=22.19.0` (see `.nvmrc`), Git for Windows, Python 3, and `jq` for graph builds. Library initialization still uses the installed llm-wiki Skill; its installation is described below.
 
-The workbench discovers standard Git Bash installations without requiring `bash.exe` on PATH. Custom Bash locations use pi's existing `shellPath` setting. Folder selection uses the Windows system dialog; users can cancel and enter a path manually.
+The workbench's initialization and graph scripts discover standard Git Bash installations without requiring `bash.exe` on PATH. Custom Bash locations use pi's existing `shellPath` setting. Folder selection uses the Windows system dialog; users can cancel and enter a path manually.
 
 ```powershell
 npm ci
@@ -273,6 +273,15 @@ npm run dev
 ```
 
 Library names are checked for Windows device names, invalid characters, and trailing periods. Native Windows CI covers a checkout path containing spaces, script initialization, intake, evidence retrieval, and browser flows. Picker tests verify PowerShell and WinForms without opening a dialog. Passing macOS tests does not replace a native Windows run.
+
+Use the dedicated Windows checks below after `npm ci`. The full `npm run quality-and-tests` suite currently targets macOS/Linux; its Bash discovery and environment isolation are not fully adapted to Windows.
+
+```powershell
+node workbench/scripts/run-platform-workbench-tests.mjs build --require-windows
+node workbench/scripts/run-platform-workbench-tests.mjs backend --require-windows
+node node_modules/playwright/cli.js install chromium
+node workbench/scripts/run-platform-workbench-tests.mjs browser --require-windows
+```
 
 ### Skill Installation
 

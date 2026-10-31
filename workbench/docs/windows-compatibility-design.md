@@ -36,3 +36,4 @@ macOS 继续使用原有系统对话框。Windows 使用系统自带 PowerShell 
 - 架构检查的文件身份使用统一的仓库相对路径，Windows 反斜杠不能使合法调用失去白名单，也不能让应拦截的调用绕过规则。
 - Git Bash 的挂载路径在进入原生 Node/jq 前转换为 Windows 物理路径，不能依赖带空格或引号参数的自动转换；Bash 自身文件操作保留 POSIX 路径。
 - 原生 CI 的构建、后端和浏览器阶段保留有界、脱敏的失败诊断，支持从检查注释定位错误，不能只返回无法定位的退出码。
+- Windows 使用专用 build/backend/browser 验证入口；全仓 `quality-and-tests` 当前仍以 macOS/Linux 为基线，不能把这套原生专项验证表述为全仓工具链已完整支持 Windows。

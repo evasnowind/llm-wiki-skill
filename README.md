@@ -290,7 +290,7 @@ Hermes 会优先加载仓库根的 `HERMES.md` 作为项目上下文。这个文
 
 准备 Node.js `>=22.19.0`（版本以 `.nvmrc` 为准）、Git for Windows、Python 3 和图谱所需的 `jq`。初始化工具仍使用已安装的 llm-wiki Skill；安装方法见下节。
 
-工作台会识别 Git Bash 的常见安装位置，不要求额外将 `bash.exe` 加入 PATH。自定义 Bash 位置沿用 pi 的 `shellPath` 设置。Windows 的“选择文件夹”使用系统目录对话框；取消后可以继续手动填写路径。
+工作台的初始化与图谱脚本会识别 Git Bash 的常见安装位置，不要求额外将 `bash.exe` 加入 PATH。自定义 Bash 位置沿用 pi 的 `shellPath` 设置。Windows 的“选择文件夹”使用系统目录对话框；取消后可以继续手动填写路径。
 
 ```powershell
 npm ci
@@ -298,6 +298,15 @@ npm run dev
 ```
 
 库名会提前检查 Windows 保留设备名、非法字符和尾点。原生 Windows CI 覆盖包含空格的仓库路径、脚本初始化、入库、检索引用与浏览器流程；目录选择器验证 PowerShell 和 WinForms 调用，不在 CI 中弹窗。macOS 本机通过不能代替该 Windows 运行结果。
+
+Windows 使用以下专用入口验证工作台（先完成 `npm ci`）。全仓 `npm run quality-and-tests` 当前以 macOS/Linux 为基线，其中的 Bash 定位和环境隔离尚未完整适配 Windows。
+
+```powershell
+node workbench/scripts/run-platform-workbench-tests.mjs build --require-windows
+node workbench/scripts/run-platform-workbench-tests.mjs backend --require-windows
+node node_modules/playwright/cli.js install chromium
+node workbench/scripts/run-platform-workbench-tests.mjs browser --require-windows
+```
 
 ### Skill 安装
 
