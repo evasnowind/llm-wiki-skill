@@ -113,6 +113,7 @@ export const QUALITY_STEPS = [
 				"tests/js/wiki-link-performance.test.js",
 			]),
 			shellCommand("tests/graph-path-identity-build.regression-1.sh"),
+			shellCommand("tests/graph-native-paths.regression-1.sh"),
 			shellCommand("tests/graph-warning-exit-codes.regression-1.sh"),
 		],
 	},
