@@ -30,3 +30,4 @@ export * from "./ingest-jobs.js";
 export * from "./graph-events.js";
 export * from "./graph-renames.js";
 export * from "./endpoints.js";
+export * from "./source-revisions.js";

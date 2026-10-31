@@ -11,13 +11,16 @@ import type { ModelRef } from "../config.js";
 import { ensureSafeDirectory, isWithin, readRegularFile, sha256Bytes } from "../graph-rename-safe-io.js";
 import { atomicWrite, readOptional, storageRoot } from "./storage.js";
 import { inspectPublishedSource, publishSource } from "./publish.js";
+import { createSourceRevisions, type RevisionContext, type SourceRevisionsService } from "./source-revisions.js";
+import type { SourceRevisionGenerator } from "./revision-generator.js";
+import { readInspectedMarkdownSources } from "../knowledge-bases.js";
 
 const EXTENSIONS = new Set([".md", ".txt", ".pdf", ".html"]);
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const MAX_BATCH_BYTES = 100 * 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
 
-interface StoredFile extends IngestFile { extension: string; sourceHash: string; prepared: boolean; allowMetadataRebase?: boolean }
+interface StoredFile extends IngestFile { extension: string; sourceHash: string; prepared: boolean; allowMetadataRebase?: boolean; canonicalPath?: string }
 interface StoredJob extends Omit<IngestJob, "files"> { files: StoredFile[]; model: ModelRef | null }
 interface DiskState { version: 1; kbPath: string; kbDev: number; kbIno: number; jobs: StoredJob[] }
 interface QueueState extends DiskState {
@@ -35,6 +38,9 @@ export interface IngestQueueDeps {
 	root: string;
 	assertRegisteredKnowledgeBase: (kbPath: string) => Promise<string>;
 	validateSources: (scanId: string | undefined, files: string[]) => { ok: true; root: string } | { ok: false; error: string };
+	generateRevision?: SourceRevisionGenerator;
+	resolveRevisionModel?: () => Promise<ModelRef | null>;
+	scanMarkdown?: typeof readInspectedMarkdownSources;
 	generate: (input: IngestGeneratorInput, progress: (chars: number) => void, signal: AbortSignal) => Promise<string>;
 	beforePublish?: (kbPath: string) => void;
 	afterPublish?: (kbPath: string, changed: boolean) => void;
@@ -46,6 +52,7 @@ export interface IngestQueueDeps {
 }
 
 export interface IngestQueueService {
+	sourceRevisions: SourceRevisionsService;
 	enqueue(input: IngestJobRequestBody): Promise<IngestJob>;
 	list(kbPath: string): Promise<IngestJob[]>;
 	cancel(kbPath: string, id: string): Promise<IngestJob>;
@@ -64,6 +71,36 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 	const owner = randomUUID();
 	let owned = false;
 	let ownerPromise: Promise<void> | undefined;
+	function revisionContext(state: QueueState): RevisionContext {
+		return { root, directory: state.directory, kbPath: state.kbPath, jobs: state.jobs,
+			commit: async (operation) => { const result = state.commitTail.catch(() => undefined).then(operation); state.commitTail = result.then(() => undefined, () => undefined); return result; },
+			checkBoundary: () => checkBoundary(state) };
+	}
+	const sourceRevisions = createSourceRevisions({
+		withContext: async (requested, create, operation) => {
+			if (create) ensureOpen();
+			const state = await load(await registered(requested));
+			return lock(state, async () => {
+				await checkBoundary(state);
+				if (state.storageError) throw state.storageError;
+				if (create) { await initialize(state); await save(state); }
+				return operation(revisionContext(state));
+			});
+		},
+		withPublication: async (requested, operation) => {
+			const state = await load(await registered(requested));
+			const publication = state.commitTail.catch(() => undefined).then(() => lock(state, async () => {
+				await checkBoundary(state); await initialize(state);
+				if (state.storageError) throw state.storageError;
+				return operation(revisionContext(state));
+			}));
+			state.commitTail = publication.then(() => undefined, () => undefined);
+			return publication;
+		},
+		scan: deps.scanMarkdown ?? readInspectedMarkdownSources, generate: deps.generateRevision, resolveModel: deps.resolveRevisionModel,
+		beforePublish: deps.beforePublish, afterPublish: deps.afterPublish,
+		afterPublicationWrite: deps.afterPublicationWrite, afterPublicationRead: deps.afterPublicationRead,
+	});
 
 	async function checkStorage(create: boolean): Promise<boolean> {
 		const parent = await lstat(path.dirname(requestedRoot)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
@@ -173,7 +210,8 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 		const input = IngestJobRequestBodySchema.parse(request);
 		const kbPath = await registered(input.kbPath);
 		const state = await load(kbPath);
-		const sources: Array<{ id: string; name: string; extension: string; sourceHash: string; bytes: Buffer }> = [];
+		await sourceRevisions.recover(kbPath);
+		const sources: Array<{ id: string; name: string; extension: string; sourceHash: string; bytes: Buffer; canonicalPath: string }> = [];
 		let totalBytes = 0;
 		for (const rawPath of [...new Set(input.filePaths)]) {
 			if (!path.isAbsolute(rawPath) || !EXTENSIONS.has(path.extname(rawPath).toLowerCase())) throw invalid("只支持 Markdown、文本、PDF 和 HTML 文件");
@@ -191,16 +229,32 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 			if (totalBytes > MAX_BATCH_BYTES) throw invalid("单批素材不能超过 100 MiB");
 			const sourceHash = sha256Bytes(bytes);
 			const id = hash(`${canonical}\0${sourceHash}`);
-			if (!sources.some((source) => source.id === id)) sources.push({ id, name: path.basename(candidate), extension: path.extname(candidate).toLowerCase(), sourceHash, bytes });
+			if (!sources.some((source) => source.id === id)) sources.push({ id, name: path.basename(candidate), extension: path.extname(candidate).toLowerCase(), sourceHash, bytes, canonicalPath: canonical });
 		}
 		return lock(state, async () => {
 			ensureOpen();
 			await checkBoundary(state);
 			await checkStorage(false);
 			if (state.storageError) throw state.storageError;
+			const adopted = new Map<string, { outputPath: string; versionId: string }>();
+			for (const source of sources) {
+				const completion = await sourceRevisions.findAdoptedCompletion(revisionContext(state), source.id, source.sourceHash, source.canonicalPath);
+				if (completion) adopted.set(source.id, completion);
+			}
 			const ids = sources.map((source) => source.id).sort().join(",");
 			const matching = state.jobs.find((job) => job.files.map((file) => file.id).sort().join(",") === ids);
 			if (matching) {
+				if (matching.files.some((file) => adopted.has(file.id) && (file.status !== "completed" || file.outputPath !== adopted.get(file.id)!.outputPath))) {
+					await initialize(state);
+					await change(state, () => {
+						for (const file of matching.files) {
+							const completion = adopted.get(file.id);
+							if (completion) { file.status = "completed"; file.outputPath = completion.outputPath; file.error = null; }
+						}
+						touch(matching);
+					});
+					for (const file of matching.files) if (adopted.has(file.id)) state.active.get(`${matching.id}/${file.id}`)?.controller.abort();
+				}
 				const restorations = new Map<string, "missing" | "changed">();
 				for (const file of matching.files.filter((item) => item.status === "completed")) {
 					const published = await inspectCompletion(state, file);
@@ -219,11 +273,17 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 				}
 				return publicJob(matching);
 			}
-			const overlapping = state.jobs.some((job) => job.files.some((file) => sources.some((source) => source.id === file.id) && ["pending", "running", "committing"].includes(file.status)));
+			const overlapping = state.jobs.some((job) => job.files.some((file) => sources.some((source) => source.id === file.id && !adopted.has(source.id)) && ["pending", "running", "committing"].includes(file.status)));
 			if (overlapping) throw Object.assign(new Error("部分素材已有入库任务，请等待现有任务完成"), { code: "BUSY" });
 			await initialize(state);
 			const files: StoredFile[] = [];
 			for (const source of sources) {
+				const completion = adopted.get(source.id);
+				if (completion) {
+					files.push({ id: source.id, name: source.name, extension: source.extension, sourceHash: source.sourceHash, canonicalPath: source.canonicalPath,
+						prepared: false, status: "completed", attempts: 0, progressChars: 0, outputPath: completion.outputPath, error: null });
+					continue;
+				}
 				const completed = state.jobs.flatMap((job) => job.files).find((file) => file.id === source.id && file.status === "completed");
 				if (completed) {
 					const reused = structuredClone(completed);
@@ -233,7 +293,7 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 					continue;
 				}
 				await atomicWrite(root, path.join(state.directory, "inputs", `${source.id}${source.extension}`), source.bytes);
-				files.push({ id: source.id, name: source.name, extension: source.extension, sourceHash: source.sourceHash, prepared: false,
+				files.push({ id: source.id, name: source.name, extension: source.extension, sourceHash: source.sourceHash, canonicalPath: source.canonicalPath, prepared: false,
 					status: "pending", attempts: 0, progressChars: 0, outputPath: null, error: null });
 			}
 			const now = new Date().toISOString();
@@ -246,7 +306,9 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 		});
 	}
 
-	function inspectCompletion(state: QueueState, file: StoredFile): Promise<"valid" | "missing" | "changed"> {
+	async function inspectCompletion(state: QueueState, file: StoredFile): Promise<"valid" | "missing" | "changed"> {
+		const managed = await sourceRevisions.inspectLegacyCompletion(revisionContext(state), file.id);
+		if (managed) return managed;
 		return inspectPublishedSource({ kbPath: state.kbPath, stateRoot: root,
 			journalPath: path.join(state.directory, "publications", `${file.id}.json`),
 			rawPath: `raw/${file.extension === ".pdf" ? "pdfs" : "notes"}/${file.id}${file.extension}`,
@@ -274,9 +336,16 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 			await acquire();
 			const job = state.jobs.find((candidate) => candidate.id === id);
 			if (!job) throw Object.assign(new Error("入库任务不存在"), { code: "NOT_FOUND" });
+			const adopted = new Map<string, { outputPath: string; versionId: string }>();
+			if (retry) for (const file of job.files.filter((item) => ["failed", "cancelled"].includes(item.status))) {
+				const completion = await sourceRevisions.findAdoptedCompletion(revisionContext(state), file.id, file.sourceHash, file.canonicalPath);
+				if (completion) adopted.set(file.id, completion);
+			}
 			await change(state, () => {
 				for (const file of job.files) {
-					if (retry && ["failed", "cancelled"].includes(file.status)) {
+					if (retry && adopted.has(file.id)) {
+						file.status = "completed"; file.outputPath = adopted.get(file.id)!.outputPath; file.error = null;
+					} else if (retry && ["failed", "cancelled"].includes(file.status)) {
 						file.status = "pending"; file.error = null; file.progressChars = 0; file.allowMetadataRebase = true;
 					} else if (!retry && ["pending", "running"].includes(file.status)) {
 						file.status = "cancelled"; file.error = null;
@@ -366,9 +435,15 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 				await change(state, () => { file.status = "committing"; touch(findJob(state, jobId)); });
 			});
 			if (findFile(state, jobId, fileId).status !== "committing") return;
+			await sourceRevisions.recover(state.kbPath);
 			const publication = state.commitTail.catch(() => undefined).then(async () => {
 				await checkBoundary(state);
 				const file = findFile(state, jobId, fileId);
+				const completion = await sourceRevisions.findAdoptedCompletion(revisionContext(state), file.id, file.sourceHash, file.canonicalPath);
+				if (completion) {
+					await lock(state, () => change(state, () => { const live = findFile(state, jobId, fileId); live.status = "completed"; live.outputPath = completion.outputPath; live.error = null; touch(findJob(state, jobId)); }));
+					return;
+				}
 				const bytes = await readRegularFile(root, path.join(state.directory, "inputs", `${fileId}${file.extension}`), false);
 				const generated = await readRegularFile(root, path.join(state.directory, "results", `${fileId}.md`), false);
 				if (!bytes || sha256Bytes(bytes) !== file.sourceHash || !generated) throw new Error("入库检查点损坏");
@@ -411,6 +486,7 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 			let kbPath: string;
 			try { kbPath = await registered(record.kbPath); } catch { continue; }
 			const state = await load(kbPath);
+			await sourceRevisions.recover(kbPath);
 			await lock(state, async () => {
 				if (!state.jobs.some((job) => job.files.some((file) => ["running", "committing"].includes(file.status)))) return;
 				await change(state, () => { for (const job of state.jobs) { for (const file of job.files) if (["running", "committing"].includes(file.status)) file.status = "pending"; touch(job); } });
@@ -426,6 +502,7 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 	async function close(): Promise<void> {
 		closePromise ??= (async () => {
 			closing = true;
+			await sourceRevisions.close();
 			const loaded = await Promise.all([...states.values()]);
 			if (!owned) return;
 			for (const state of loaded) {
@@ -436,6 +513,7 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 			}
 			await Promise.all(loaded.map((state) => state.pumpPromise));
 			await Promise.all(loaded.flatMap((state) => [...state.active.values()].map((active) => active.promise)));
+			await Promise.all(loaded.map((state) => state.commitTail.catch(() => undefined)));
 			if (owned) {
 				const target = path.join(root, ".owner.lock");
 				const current = await readRegularFile(root, target, true);
@@ -446,7 +524,7 @@ export function createIngestQueue(deps: IngestQueueDeps): IngestQueueService {
 		return closePromise;
 	}
 
-	return { enqueue, list, cancel: (kb, id) => action(kb, id, false), retry: (kb, id) => action(kb, id, true), recover, close };
+	return { sourceRevisions, enqueue, list, cancel: (kb, id) => action(kb, id, false), retry: (kb, id) => action(kb, id, true), recover, close };
 }
 
 async function readSource(root: string, candidate: string): Promise<Buffer> {

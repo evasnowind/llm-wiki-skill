@@ -9,6 +9,7 @@ import { assertSafePath } from "./graph-rename-safe-io.js";
 import { assertRegisteredKnowledgeBase } from "./knowledge-bases.js";
 import { parseMarkdownDocument, type MarkdownDocument } from "./markdown-retrieval.js";
 import { findRepoRoot } from "./repo-root.js";
+import { managedHistoricalHashes } from "./ingest/source-revision-history.js";
 
 export interface RetrievalDocument extends MarkdownDocument {
 	path: string;
@@ -22,7 +23,7 @@ const MAX_DOCUMENTS = 1500;
 const MAX_ENTRIES = 10_000;
 const MAX_TOTAL_BYTES = 20_000_000;
 
-export async function loadRetrievalCorpus(kbPath: string, mode: RetrievalMode, assertRegistered = true): Promise<{ documents: RetrievalDocument[]; warnings: string[] }> {
+export async function loadRetrievalCorpus(kbPath: string, mode: RetrievalMode, assertRegistered = true, historyReader = managedHistoricalHashes): Promise<{ documents: RetrievalDocument[]; warnings: string[] }> {
 	if (assertRegistered) await assertRegisteredKnowledgeBase(kbPath);
 	const paths: string[] = [];
 	const warnings = new Set<string>();
@@ -62,11 +63,13 @@ export async function loadRetrievalCorpus(kbPath: string, mode: RetrievalMode, a
 		paths.push("purpose.md", "index.md");
 	}
 	await walk("raw");
+	const historical = await historyReader(kbPath);
 	const documents: RetrievalDocument[] = [];
 	let bytesSeen = 0;
 	for (const relativePath of paths) {
 		try {
 			const file = await readEvidenceFile(kbPath, relativePath);
+			if (historical.get(relativePath) === file.fileHash) continue;
 			bytesSeen += Buffer.byteLength(file.content, "utf8");
 			if (bytesSeen > MAX_TOTAL_BYTES) { warnings.add("检索扫描达到 20 MB 文本上限，结果可能不完整。"); break; }
 			const name = path.posix.basename(relativePath).replace(/\.(md|txt)$/u, "");

@@ -54,10 +54,13 @@ export interface PublishInput {
 	afterWrite?: (relativePath: string) => void | Promise<void>;
 	afterReadShared?: (relativePath: string) => void | Promise<void>;
 	allowMetadataRebase?: boolean;
+	/** Explicit compare-and-swap authorization for a reviewed summary update. */
+	expectedSummaryHash?: string | null;
+	operation?: "revision";
 }
 
 /** A durable write-set is replayed forward; unknown external versions are never replaced. */
-export async function publishSource(input: PublishInput): Promise<void> {
+export async function publishSource(input: PublishInput): Promise<{ bytes: Buffer; hash: string; rawHash: string }> {
 	const saved = await readOptional(input.stateRoot, input.journalPath);
 	let publication: Publication;
 	if (saved !== null) {
@@ -74,19 +77,21 @@ export async function publishSource(input: PublishInput): Promise<void> {
 		const desired: Array<[string, Buffer, Buffer | null | undefined]> = [[input.rawPath, input.bytes, undefined], [input.outputPath, Buffer.from(source), undefined]];
 		for (const [relative, addition] of [
 			["index.md", `- [[${input.outputPath.replace(/\.md$/, "")}]] — ${title} ${marker}\n`],
-			["log.md", `\n- ${date} 入库：${title} → [[${input.outputPath.replace(/\.md$/, "")}]] ${marker}\n`],
+			["log.md", `\n- ${date} ${input.operation === "revision" ? "采用素材版本" : "入库"}：${title} → [[${input.outputPath.replace(/\.md$/, "")}]] ${marker}\n`],
 		] as const) {
 			const current = await readRegularFile(input.kbPath, path.join(input.kbPath, relative), true);
 			await input.afterReadShared?.(relative);
 			const text = current?.toString("utf8") ?? (relative === "index.md" ? "# 知识库索引\n\n" : "# 操作日志\n");
-			desired.push([relative, Buffer.from(text.includes(marker) ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${addition}`), current]);
+			desired.push([relative, Buffer.from(text.includes(marker) || relative === "index.md" && input.operation === "revision" && text.includes(`[[${input.outputPath.replace(/\.md$/, "")}]]`) ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${addition}`), current]);
 		}
 		publication = { version: 1, writes: [] };
 		for (const [relative, bytes, original] of desired) {
 			await ensureSafeDirectory(input.kbPath, path.dirname(path.join(input.kbPath, relative)));
 			const target = path.join(input.kbPath, relative);
 			const current = original === undefined ? await readRegularFile(input.kbPath, target, true) : original;
-			if ((relative === input.rawPath || relative === input.outputPath) && current && !current.equals(bytes)) throw conflict();
+			if (relative === input.outputPath && input.expectedSummaryHash !== undefined) {
+				if ((current ? sha256Bytes(current) : null) !== input.expectedSummaryHash) throw conflict();
+			} else if ((relative === input.rawPath || relative === input.outputPath) && current && !current.equals(bytes)) throw conflict();
 			const token = randomUUID();
 			publication.writes.push({ path: relative, before: current ? sha256Bytes(current) : null,
 				after: sha256Bytes(bytes), bytes: bytes.toString("base64"),
@@ -122,6 +127,22 @@ export async function publishSource(input: PublishInput): Promise<void> {
 		if (rebased) await atomicWrite(input.stateRoot, input.journalPath, `${JSON.stringify(publication)}\n`);
 	}
 	for (const write of publication.writes) { await applyWrite(input.kbPath, write); await input.afterWrite?.(write.path); }
+	return summaryProof(publication, input.rawPath, input.outputPath);
+}
+
+/** Journal bytes, rather than a later mutable filesystem read, define the approved version. */
+export async function readPublishedSourceSummary(input: {
+	stateRoot: string; journalPath: string; rawPath: string; outputPath: string;
+}): Promise<{ bytes: Buffer; hash: string; rawHash: string }> {
+	const raw = await readOptional(input.stateRoot, input.journalPath);
+	if (!raw) throw conflict();
+	const publication = parsePublication(raw);
+	assertExpectedPaths(publication, input.rawPath, input.outputPath);
+	return summaryProof(publication, input.rawPath, input.outputPath);
+}
+function summaryProof(publication: Publication, rawPath: string, outputPath: string): { bytes: Buffer; hash: string; rawHash: string } {
+	const summary = publication.writes.find((item) => item.path === outputPath)!;
+	return { bytes: Buffer.from(summary.bytes, "base64"), hash: summary.after, rawHash: publication.writes.find((item) => item.path === rawPath)!.after };
 }
 
 function parsePublication(raw: string): Publication {

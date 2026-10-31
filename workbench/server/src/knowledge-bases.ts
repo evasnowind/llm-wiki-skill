@@ -10,10 +10,11 @@
  */
 
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { readRegularFile, sha256Bytes } from "./graph-rename-safe-io.js";
 
 import {
 	type AppConfig,
@@ -61,7 +62,7 @@ const INSPECT_SCAN_TTL_MS = 30 * 60 * 1000;
 
 const inspectScans = new Map<
 	string,
-	{ root: string; paths: Set<string>; expiresAt: number }
+	{ root: string; paths: Set<string>; expiresAt: number; dev: number; ino: number; complete: boolean; warnings: string[]; hashes: Record<string, string> }
 >();
 
 export function expandUserPath(rawPath: string): string {
@@ -147,19 +148,24 @@ export async function inspectPath(rawPath: string): Promise<InspectPathResult> {
 async function scanIngestibleFiles(root: string): Promise<NonNullable<InspectPathResult["ingestibleFiles"]>> {
 	const paths: string[] = [];
 	let truncated = false;
+	const warnings = new Set<string>();
+	const rootInfo = await lstat(root);
+	if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw Object.assign(new Error("来源目录已变化"), { code: "FORBIDDEN_PATH" });
 
 	async function walk(dir: string, depth: number): Promise<void> {
 		if (depth > MAX_SCAN_DEPTH || paths.length >= MAX_INGESTIBLE_FILES) {
 			truncated = true;
 			return;
 		}
-		const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+		const entries = await readdir(dir, { withFileTypes: true }).catch(() => { warnings.add("部分目录不可读，不能判断删除"); return []; });
+		entries.sort((a, b) => a.name.localeCompare(b.name, "en"));
 		for (const entry of entries) {
 			if (paths.length >= MAX_INGESTIBLE_FILES) {
 				truncated = true;
 				return;
 			}
 			if (entry.name === ".DS_Store") continue;
+			if (entry.isSymbolicLink()) { warnings.add("符号链接未纳入扫描，不能判断删除"); continue; }
 			const fullPath = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (entry.name.startsWith(".") && ![".wiki-tmp"].includes(entry.name)) continue;
@@ -172,9 +178,24 @@ async function scanIngestibleFiles(root: string): Promise<NonNullable<InspectPat
 	}
 
 	await walk(root, 0);
+	if (truncated) warnings.add("扫描达到深度或数量上限，不能判断删除");
+	const hashes: Record<string, string> = {};
+	let markdownBytes = 0;
+	for (const file of paths.filter((value) => extname(value).toLowerCase() === ".md")) {
+		try {
+			const metadata = await lstat(file);
+			if (!metadata.isFile() || metadata.isSymbolicLink() || !metadata.size || metadata.size > 20 * 1024 * 1024) { warnings.add("部分 Markdown 为空或超过 20 MiB，不能判断删除"); continue; }
+			if (markdownBytes + metadata.size > 100 * 1024 * 1024) { warnings.add("扫描达到 100 MiB 上限，不能判断删除"); continue; }
+			const bytes = await readRegularFile(root, file, false);
+			if (!bytes || !bytes.length || bytes.length > 20 * 1024 * 1024) { warnings.add("部分 Markdown 为空或超过 20 MiB，不能判断删除"); continue; }
+			markdownBytes += bytes.length;
+			hashes[file] = sha256Bytes(bytes);
+		} catch { warnings.add("部分 Markdown 无法安全读取，不能判断删除"); }
+	}
+	for (const [id, grant] of inspectScans) if (grant.expiresAt < Date.now()) inspectScans.delete(id);
 	const scanId = randomUUID();
 	inspectScans.set(scanId, {
-		root,
+		root, dev: rootInfo.dev, ino: rootInfo.ino, complete: warnings.size === 0, warnings: [...warnings], hashes,
 		paths: new Set(paths),
 		expiresAt: Date.now() + INSPECT_SCAN_TTL_MS,
 	});
@@ -204,6 +225,37 @@ export function validateInspectedSourceFiles(
 		}
 	}
 	return { ok: true, root: scan.root, paths: scan.paths };
+}
+
+/** This grant is process-local and expires; durable source records never authorize a rescan. */
+export async function readInspectedMarkdownSources(scanId: string): Promise<{
+	root: string; complete: boolean; warnings: string[]; files: Array<{ path: string; bytes: Buffer; hash: string }>;
+}> {
+	const grant = inspectScans.get(scanId);
+	if (!grant || grant.expiresAt < Date.now()) throw Object.assign(new Error("来源扫描已失效，请重新选择目录"), { code: "INVALID_REQUEST" });
+	const info = await lstat(grant.root);
+	if (!info.isDirectory() || info.isSymbolicLink() || info.dev !== grant.dev || info.ino !== grant.ino || await realpath(grant.root) !== grant.root) {
+		throw Object.assign(new Error("来源目录已变化，请重新选择"), { code: "FORBIDDEN_PATH" });
+	}
+	// Re-enumeration detects files added after approval, instead of expanding the approved set.
+	const observed = await scanIngestibleFiles(grant.root);
+	const current = inspectScans.get(observed.scanId)!;
+	inspectScans.delete(observed.scanId);
+	if (JSON.stringify([...grant.paths].sort()) !== JSON.stringify([...current.paths].sort()) || JSON.stringify(Object.entries(grant.hashes).sort()) !== JSON.stringify(Object.entries(current.hashes).sort())) {
+		throw Object.assign(new Error("来源内容已变化，请重新检查"), { code: "CONFLICT" });
+	}
+	const files: Array<{ path: string; bytes: Buffer; hash: string }> = [];
+	let total = 0;
+	for (const [file, hash] of Object.entries(grant.hashes)) {
+		const bytes = await readRegularFile(grant.root, file, false);
+		if (!bytes || sha256Bytes(bytes) !== hash) throw Object.assign(new Error("来源内容已变化，请重新检查"), { code: "CONFLICT" });
+		total += bytes.length;
+		if (total > 100 * 1024 * 1024) throw Object.assign(new Error("单批素材不能超过 100 MiB"), { code: "INVALID_REQUEST" });
+		files.push({ path: file, bytes, hash });
+	}
+	const after = await lstat(grant.root);
+	if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== grant.dev || after.ino !== grant.ino) throw Object.assign(new Error("来源目录已变化，请重新选择"), { code: "FORBIDDEN_PATH" });
+	return { root: grant.root, complete: grant.complete && current.complete, warnings: [...new Set([...grant.warnings, ...current.warnings])], files };
 }
 
 /**

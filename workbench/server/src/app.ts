@@ -28,6 +28,7 @@ import { createGraphRenameRoutes, defaultGraphRenameRouteService, type GraphRena
 import { createKnowledgeBaseRoutes, defaultKnowledgeBaseRouteService, type KnowledgeBaseRouteService } from "./routes/knowledge-bases.js";
 import { createPageRoutes, defaultPageRouteService, type PageRouteService } from "./routes/pages.js";
 import { createEvidenceRoutes, defaultEvidenceRouteService, type EvidenceRouteService } from "./routes/evidence.js";
+import { createSourceRevisionRoutes } from "./routes/source-revisions.js";
 import { createIngestJobRoutes, defaultIngestJobRouteService, type IngestJobRouteService } from "./routes/ingest-jobs.js";
 import {
 	createPromptRoutes,
@@ -168,6 +169,7 @@ export function createApp(deps: WorkbenchAppDeps = {}): Hono {
 		),
 	);
 	app.route("/api", createIngestJobRoutes(deps.ingestJobService ?? defaultIngestJobRouteService));
+	app.route("/api", createSourceRevisionRoutes(deps.ingestJobService ?? defaultIngestJobRouteService));
 
 	return app;
 }

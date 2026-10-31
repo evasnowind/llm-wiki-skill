@@ -9,6 +9,8 @@ import {
 
 import { APP_DIR } from "../config.js";
 import { generateIngestSummary } from "../ingest/generator.js";
+import { generateSourceRevision, resolveSourceRevisionModelRef } from "../ingest/revision-generator.js";
+import type { SourceRevisionsService } from "../ingest/source-revisions.js";
 import { resumeGraphWatcher, suspendGraphWatcher } from "../graph.js";
 import { mapKnowledgeBaseError, resolveKnowledgeBaseContext } from "../http/knowledge-base-context.js";
 import { HttpContractError, parseValidatedBody, parseValidatedInput } from "../http/request.js";
@@ -16,7 +18,8 @@ import { jsonOk } from "../http/response.js";
 import { assertRegisteredKnowledgeBase, validateInspectedSourceFiles } from "../knowledge-bases.js";
 import { createIngestQueue, type IngestQueueService } from "../ingest/queue.js";
 
-export interface IngestJobRouteService extends IngestQueueService {
+export interface IngestJobRouteService extends Omit<IngestQueueService, "sourceRevisions"> {
+	sourceRevisions?: SourceRevisionsService;
 	assertRegisteredKnowledgeBase(kbPath: string): Promise<string>;
 }
 
@@ -26,6 +29,8 @@ function createDefaultQueue(): IngestQueueService {
 		assertRegisteredKnowledgeBase,
 		validateSources: validateInspectedSourceFiles,
 		generate: generateIngestSummary,
+		generateRevision: generateSourceRevision,
+		resolveRevisionModel: resolveSourceRevisionModelRef,
 		beforePublish: suspendGraphWatcher,
 		afterPublish: (kbPath, trigger) => resumeGraphWatcher(kbPath, { trigger }),
 	});
@@ -34,6 +39,7 @@ let runtimeQueue = createDefaultQueue();
 let runtimeClosed = false;
 export const defaultIngestJobRouteService: IngestJobRouteService = {
 	assertRegisteredKnowledgeBase,
+	get sourceRevisions() { return runtimeQueue.sourceRevisions; },
 	enqueue: (input) => runtimeQueue.enqueue(input),
 	list: (kbPath) => runtimeQueue.list(kbPath),
 	cancel: (kbPath, id) => runtimeQueue.cancel(kbPath, id),

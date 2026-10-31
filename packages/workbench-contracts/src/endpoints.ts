@@ -129,6 +129,15 @@ function freezeEndpointEntries<const Entries extends readonly EndpointEntry[]>(
 }
 
 export const ENDPOINT_REGISTRY = freezeEndpointEntries([
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/check", kind: "migrated-json", safety: "state-changing" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions", kind: "migrated-json", safety: "read-only" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates", kind: "migrated-json", safety: "state-changing" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/candidates/:id/detail", kind: "migrated-json", safety: "read-only" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/adopt", kind: "migrated-json", safety: "state-changing" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/cancel", kind: "migrated-json", safety: "state-changing" },
+	{ method: "POST", path: "/api/knowledge-bases/source-revisions/candidates/:id/retry", kind: "migrated-json", safety: "state-changing" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/sources/:sourceId", kind: "migrated-json", safety: "read-only" },
+	{ method: "GET", path: "/api/knowledge-bases/source-revisions/versions/:versionId", kind: "migrated-json", safety: "read-only" },
 	{
 		method: "POST",
 		path: "/api/evidence/read",
