@@ -10,7 +10,7 @@
 
 把碎片化的信息变成持续积累、互相链接的知识库
 
-[![version](https://img.shields.io/badge/v3.6.94-Windows兼容修复-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.95-素材更新与摘要候选-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-多平台-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -90,6 +90,8 @@ bash install.sh --platform hermes
 | | 功能 | 说明 |
 |---|---|---|
 | 📥 | **可靠入库队列** | 保留原文、生成素材摘要并更新索引日志；任务持久化，刷新、关闭面板或切换知识库后仍可继续查看；支持取消、失败重试和重启恢复，相同输入不重复生成 |
+| 🔄 | **Markdown 增量更新** | 主动检查已确认的来源目录，查看新增、修改、删除和未变化清单；仅为选中变化生成候选，对照确认后采用并保留版本历史；来源删除只提示，不删除已有知识 |
+| ✍️ | **摘要重新生成** | 为已完成素材选择模型、填写改进要求，基于保留原文生成独立候选；确认采用前不改正式内容，外部编辑会阻止覆盖，刷新或重启后仍可继续核对 |
 | 🪟 | **Windows 工作台兼容** | 初始化与图谱统一定位 Git Bash，支持中文空格路径；原生目录选择器、可移植库名校验和 Windows 工作台 CI 覆盖关键流程 |
 | 🔎 | **Markdown 检索与出处** | 按章节、标签、别名和一跳双链查找资料；选择“知识综合”或“仅原文”，点击回答引用可定位原文；历史保留出处，原文变化会提示重新定位或核对 |
 | 🧮 | **共享绘制策略** | 密度、节点显示、标签与关系预算、稳定骨架和社区层级由一份规则产出；旧工具箱与早期 wash 模板已退休，Sigma 主路线与 DOM/SVG 故障回退使用同一份准备结果，每次更新只计算一次 |

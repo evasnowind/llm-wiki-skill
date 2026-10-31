@@ -10,7 +10,7 @@ Based on [Andrej Karpathy](https://karpathy.ai/)'s [llm-wiki methodology](https:
 
 Turn scattered information into a growing, interconnected knowledge base
 
-[![version](https://img.shields.io/badge/v3.6.94-Windows%20Compatibility-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.95-Reviewed%20Source%20Updates-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-multi--platform-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -90,6 +90,8 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 | | Feature | Description |
 |---|---|---|
 | 📥 | **Reliable Source Intake** | A persistent backend queue preserves originals, creates source summaries, and updates the index and log; refreshes, hidden panels, and knowledge-base switches do not cancel accepted work; cancellation, retry, restart recovery, and duplicate-input detection are included |
+| 🔄 | **Incremental Markdown Updates** | Explicitly check a confirmed source directory for added, modified, deleted, and unchanged files; generate candidates only for selected changes, review before adoption, and retain version history; missing sources never delete existing knowledge |
+| ✍️ | **Summary Regeneration** | Choose a model and optional feedback for a completed source, then generate an independent candidate from its preserved original; review survives refresh and restart, adoption requires confirmation, and external edits block replacement |
 | 🪟 | **Windows Workbench Compatibility** | Initialization and graph builds share Git Bash discovery and support Unicode/space paths; native folder selection, portable library names, and Windows workbench CI cover the key flows |
 | 🔎 | **Markdown Retrieval and Evidence** | Find sections through headings, tags, aliases, and one-hop wiki links; choose knowledge synthesis or sources-only answers, then open citations at their original location; history retains citations and changed files are relocated or flagged for review |
 | 🧭 | **Community Close-up Map** | Entering a community now feels like zooming into the same region from the global graph; positions, tiers, labels, and return highlights stay stable, then fade after the global view settles |
