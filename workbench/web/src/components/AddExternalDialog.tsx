@@ -23,6 +23,7 @@ import {
 	type InspectPathResult,
 } from "../lib/api/knowledge-bases";
 import { ApiError } from "../lib/api/client";
+import { parseDroppedPath } from "../lib/dropped-path";
 
 interface Props {
 	open: boolean;
@@ -366,19 +367,4 @@ function valueToModelRef(value: string): ModelRef | null {
 	const modelId = rest.join("/");
 	if (!provider || !modelId) return null;
 	return { provider, modelId };
-}
-
-function parseDroppedPath(dataTransfer: DataTransfer): string | null {
-	for (const type of ["text/uri-list", "text/plain"]) {
-		const raw = dataTransfer.getData(type).trim();
-		if (!raw) continue;
-		const first = raw
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.find((line) => line && !line.startsWith("#"));
-		if (!first) continue;
-		if (first.startsWith("file://")) return decodeURIComponent(new URL(first).pathname);
-		if (first.startsWith("/") || first.startsWith("~/")) return first;
-	}
-	return null;
 }

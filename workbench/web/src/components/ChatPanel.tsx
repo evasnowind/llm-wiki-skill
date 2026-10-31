@@ -33,6 +33,7 @@ import type { ToolStatusContractEvent } from "../lib/tool-status-types";
 import { cn } from "../lib/utils";
 import { DEFAULT_CHAT_STATUS, type ChatStatusSnapshot } from "../lib/view-status";
 import { extractWikiPageRefs } from "../lib/wiki-links";
+import { parseDroppedPath } from "../lib/dropped-path";
 
 type ToolMark = { name: string; status: "running" | "done" };
 
@@ -860,19 +861,4 @@ function chatStatusSummary(
 	if (status === "streaming") return "正在接收回复";
 	if (status === "error") return errorMsg ?? "对话暂时不可用";
 	return "可以发送消息";
-}
-
-function parseDroppedPath(dataTransfer: DataTransfer): string | null {
-	for (const type of ["text/uri-list", "text/plain"]) {
-		const raw = dataTransfer.getData(type).trim();
-		if (!raw) continue;
-		const first = raw
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.find((line) => line && !line.startsWith("#"));
-		if (!first) continue;
-		if (first.startsWith("file://")) return decodeURIComponent(new URL(first).pathname);
-		if (first.startsWith("/") || first.startsWith("~/")) return first;
-	}
-	return null;
 }
