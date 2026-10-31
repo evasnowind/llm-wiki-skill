@@ -16,6 +16,31 @@ SCRIPT_DIR="$(cd "$SCRIPT_DIR" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/shared-config.sh"
 
+# Git Bash's physical /tmp and drive mounts are not native Windows paths.
+# Convert filesystem arguments explicitly instead of relying on MSYS argv
+# heuristics (which can skip quoted/Unicode paths or be disabled by the host).
+native_path() {
+  local value
+  case "$OSTYPE" in
+    msys*|cygwin*)
+      command -v cygpath >/dev/null 2>&1 || {
+        echo "ERROR: cygpath is required with Git Bash/Cygwin on Windows." >&2
+        return 1
+      }
+      value="$(cygpath -m -- "$1")"
+      printf '%s\n' "${value%$'\r'}"
+      ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+native_command() {
+  case "$OSTYPE" in
+    msys*|cygwin*) MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "$@" ;;
+    *) "$@" ;;
+  esac
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -98,6 +123,12 @@ TMPDIR="$(mktemp -d -t llm-wiki-graph.XXXXXX)"
 trap 'rm -rf "$TMPDIR"' EXIT
 SCAN_DIR="$TMPDIR/scan"
 mkdir -p "$SCAN_DIR"
+NATIVE_TMPDIR="$(native_path "$TMPDIR")"
+NATIVE_SCAN_DIR="$(native_path "$SCAN_DIR")"
+NATIVE_WIKI_ROOT="$(native_path "$WIKI_ROOT")"
+NATIVE_CLI="$(native_path "$CLI")"
+NATIVE_HELPER="$(native_path "$HELPER")"
+NATIVE_OUTPUT="$(native_path "$OUTPUT")"
 
 GRAPH_FLAGS=""
 if [ "${LLM_WIKI_TEST_MODE:-0}" = "1" ]; then
@@ -108,9 +139,9 @@ else
 fi
 
 if [ -n "$GRAPH_FLAGS" ]; then
-  node "$CLI" graph "$WIKI_ROOT" "$SCAN_DIR" "$GRAPH_FLAGS" > "$TMPDIR/scan.out"
+  native_command node "$NATIVE_CLI" graph "$NATIVE_WIKI_ROOT" "$NATIVE_SCAN_DIR" "$GRAPH_FLAGS" > "$TMPDIR/scan.out"
 else
-  node "$CLI" graph "$WIKI_ROOT" "$SCAN_DIR" > "$TMPDIR/scan.out"
+  native_command node "$NATIVE_CLI" graph "$NATIVE_WIKI_ROOT" "$NATIVE_SCAN_DIR" > "$TMPDIR/scan.out"
 fi
 
 for SCAN_FILE in nodes.json edges.json warning-groups.json candidate-sets.json scan-metrics.json; do
@@ -125,18 +156,20 @@ if [ -f "$WIKI_ROOT/purpose.md" ]; then
   WIKI_TITLE="$(awk '/^# / { sub(/^# +/, ""); print; exit }' "$WIKI_ROOT/purpose.md")"
 fi
 [ -n "$WIKI_TITLE" ] || WIKI_TITLE="$(basename "$WIKI_ROOT")"
+WIKI_TITLE="${WIKI_TITLE%$'\r'}"
 
-TOTAL_SIZE="$(jq -r '.graph_source_bytes // 0' "$SCAN_DIR/scan-metrics.json")"
+TOTAL_SIZE="$(native_command jq -r '.graph_source_bytes // 0' "$NATIVE_SCAN_DIR/scan-metrics.json")"
+TOTAL_SIZE="${TOTAL_SIZE%$'\r'}"
 DEGRADE=0
 if [ "$TOTAL_SIZE" -gt "$MAX_CONTENT_BYTES" ]; then
   DEGRADE=1
 fi
 
 ANALYSIS_JSON="$TMPDIR/analysis.json"
-if ! node "$HELPER" \
-  "$SCAN_DIR/nodes.json" \
-  "$SCAN_DIR/edges.json" \
-  "$ANALYSIS_JSON" \
+if ! native_command node "$NATIVE_HELPER" \
+  "$NATIVE_SCAN_DIR/nodes.json" \
+  "$NATIVE_SCAN_DIR/edges.json" \
+  "$NATIVE_TMPDIR/analysis.json" \
   "$DEGRADE" \
   "$MAX_CONTENT_LINES" \
   "$MAX_INSIGHT_NODES" \
@@ -145,29 +178,29 @@ if ! node "$HELPER" \
   exit 1
 fi
 
-jq -e '
+native_command jq -e '
   (.nodes | type) == "array" and
   (.edges | type) == "array" and
   (.insights | type) == "object" and
   (.learning | type) == "object"
-' "$ANALYSIS_JSON" > /dev/null 2>&1 || {
+' "$NATIVE_TMPDIR/analysis.json" > /dev/null 2>&1 || {
   echo "ERROR: graph analysis helper returned invalid JSON: $ANALYSIS_JSON" >&2
   exit 1
 }
 
 if [ "${LLM_WIKI_TEST_MODE:-0}" = "1" ]; then
-  jq '.nodes | sort_by(.id)' "$ANALYSIS_JSON" > "$TMPDIR/nodes.sorted.json"
-  jq '.edges | sort_by(.from, .to, .relation_type, .type)
+  native_command jq '.nodes | sort_by(.id)' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/nodes.sorted.json"
+  native_command jq '.edges | sort_by(.from, .to, .relation_type, .type)
       | to_entries
       | map(.value + {id: ("e" + ((.key + 1) | tostring))})' \
-    "$ANALYSIS_JSON" > "$TMPDIR/edges.sorted.json"
+    "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/edges.sorted.json"
 else
-  jq '.nodes' "$ANALYSIS_JSON" > "$TMPDIR/nodes.sorted.json"
-  jq '.edges' "$ANALYSIS_JSON" > "$TMPDIR/edges.sorted.json"
+  native_command jq '.nodes' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/nodes.sorted.json"
+  native_command jq '.edges' "$NATIVE_TMPDIR/analysis.json" > "$TMPDIR/edges.sorted.json"
 fi
 
 INITIAL_VIEW="$TMPDIR/initial-view.json"
-jq --slurpfile nodes "$TMPDIR/nodes.sorted.json" '
+native_command jq --slurpfile nodes "$NATIVE_TMPDIR/nodes.sorted.json" '
   . as $edges
   | ($nodes[0]) as $node_rows
   | (reduce $edges[] as $edge ({};
@@ -181,22 +214,25 @@ jq --slurpfile nodes "$TMPDIR/nodes.sorted.json" '
       | map(.id)
       | map(select(. as $id | $representatives | index($id) | not))) as $rest
   | ($representatives + $rest)[0:30]
-' "$TMPDIR/edges.sorted.json" > "$INITIAL_VIEW"
+' "$NATIVE_TMPDIR/edges.sorted.json" > "$INITIAL_VIEW"
 
-NODE_COUNT="$(jq 'length' "$TMPDIR/nodes.sorted.json")"
-EDGE_COUNT="$(jq 'length' "$TMPDIR/edges.sorted.json")"
-INSIGHTS_DEGRADED="$(jq '.insights.meta.degraded == true' "$ANALYSIS_JSON")"
+NODE_COUNT="$(native_command jq 'length' "$NATIVE_TMPDIR/nodes.sorted.json")"
+EDGE_COUNT="$(native_command jq 'length' "$NATIVE_TMPDIR/edges.sorted.json")"
+INSIGHTS_DEGRADED="$(native_command jq '.insights.meta.degraded == true' "$NATIVE_TMPDIR/analysis.json")"
+NODE_COUNT="${NODE_COUNT%$'\r'}"
+EDGE_COUNT="${EDGE_COUNT%$'\r'}"
+INSIGHTS_DEGRADED="${INSIGHTS_DEGRADED%$'\r'}"
 
 GRAPH_INPUT="$TMPDIR/graph-data.json"
-jq -n \
+native_command jq -n \
   --arg build_date "$BUILD_DATE" \
   --arg wiki_title "$WIKI_TITLE" \
   --argjson total_nodes "$NODE_COUNT" \
   --argjson total_edges "$EDGE_COUNT" \
-  --slurpfile initial_view "$INITIAL_VIEW" \
-  --slurpfile nodes "$TMPDIR/nodes.sorted.json" \
-  --slurpfile edges "$TMPDIR/edges.sorted.json" \
-  --slurpfile analysis "$ANALYSIS_JSON" \
+  --slurpfile initial_view "$NATIVE_TMPDIR/initial-view.json" \
+  --slurpfile nodes "$NATIVE_TMPDIR/nodes.sorted.json" \
+  --slurpfile edges "$NATIVE_TMPDIR/edges.sorted.json" \
+  --slurpfile analysis "$NATIVE_TMPDIR/analysis.json" \
   --argjson degraded "$DEGRADE" \
   --argjson insights_degraded "$INSIGHTS_DEGRADED" \
   '{
@@ -215,12 +251,12 @@ jq -n \
     learning: $analysis[0].learning
   }' > "$GRAPH_INPUT"
 
-if ! node "$CLI" commit-pair \
-  "$WIKI_ROOT" \
-  "$GRAPH_INPUT" \
-  "$SCAN_DIR/warning-groups.json" \
-  "$SCAN_DIR/candidate-sets.json" \
-  "$OUTPUT" > "$TMPDIR/commit.out"; then
+if ! native_command node "$NATIVE_CLI" commit-pair \
+  "$NATIVE_WIKI_ROOT" \
+  "$NATIVE_TMPDIR/graph-data.json" \
+  "$NATIVE_SCAN_DIR/warning-groups.json" \
+  "$NATIVE_SCAN_DIR/candidate-sets.json" \
+  "$NATIVE_OUTPUT" > "$TMPDIR/commit.out"; then
   echo "ERROR: graph artifact pair commit failed for $OUTPUT" >&2
   exit 1
 fi
