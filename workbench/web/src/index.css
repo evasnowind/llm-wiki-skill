@@ -3887,6 +3887,43 @@
     width: 420px;
   }
 
+  .ingest-panel.ingest-panel-reading {
+    display: flex;
+    flex-direction: column;
+    top: 76px;
+    right: 22px;
+    bottom: 24px;
+    width: min(900px, calc(100vw - 44px));
+    max-width: calc(100vw - 44px);
+    max-height: calc(100dvh - 100px);
+  }
+
+  .ingest-panel-reading > .batch-header {
+    flex: none;
+  }
+
+  .ingest-panel-reading > .ingest-body {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    overflow-x: hidden;
+  }
+
+  .ingest-panel-reading [aria-label$="逐行变化"] td:last-child {
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 640px) {
+    .ingest-panel.ingest-panel-reading {
+      top: 68px;
+      right: 12px;
+      bottom: 12px;
+      width: calc(100vw - 24px);
+      max-width: calc(100vw - 24px);
+      max-height: calc(100dvh - 80px);
+    }
+  }
+
   .ingest-panel .batch-header > div:first-child {
     flex: 1;
   }

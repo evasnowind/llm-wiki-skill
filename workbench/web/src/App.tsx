@@ -999,6 +999,8 @@ function App() {
 					onConfigChanged={handleConfigChanged}
 				/>
 				<IngestQueuePanel
+					key={active?.kb.path ?? "no-kb"}
+					kbPath={active?.kb.path ?? null}
 					open={ingestPanelOpen}
 					knowledgeBaseName={active?.kb.name ?? null}
 					jobs={ingestQueue.jobs}

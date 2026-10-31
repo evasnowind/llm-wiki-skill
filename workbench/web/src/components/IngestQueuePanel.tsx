@@ -1,3 +1,5 @@
+import { useCallback, useState } from "react";
+import { SourceRevisionsPanel, type RegenerateTarget } from "./SourceRevisionsPanel";
 import { ExternalLink, RotateCcw, X } from "lucide-react";
 import type { IngestFileStatus, IngestJob } from "@llm-wiki/workbench-contracts";
 
@@ -5,6 +7,7 @@ import { cn } from "../lib/utils";
 
 interface Props {
 	open: boolean;
+	kbPath?: string | null;
 	knowledgeBaseName: string | null;
 	jobs: IngestJob[];
 	loading: boolean;
@@ -28,12 +31,17 @@ const statusLabels: Record<IngestFileStatus, string> = {
 };
 
 export function IngestQueuePanel({
-	open, knowledgeBaseName, jobs, loading, error, actionError, pendingIds,
+	open, kbPath, knowledgeBaseName, jobs, loading, error, actionError, pendingIds,
 	onClose, onCancel, onRetry, onRefresh, onOpenOutput,
 }: Props) {
+	const [regenerate, setRegenerate] = useState<(RegenerateTarget & { kbPath: string }) | null>(null);
+	const [readingKb, setReadingKb] = useState<string | null>(null);
+	const handleReadingChange = useCallback((reading: boolean) => {
+		setReadingKb((current) => reading ? kbPath ?? null : current === kbPath ? null : current);
+	}, [kbPath]);
 	if (!open) return null;
 	return (
-		<section className="batch-panel ingest-panel" aria-label="入库任务">
+		<section className={cn("batch-panel ingest-panel", kbPath && readingKb === kbPath && "ingest-panel-reading")} aria-label="入库任务">
 			<div className="batch-header">
 				<div className="min-w-0">
 					<div className="batch-title">入库任务</div>
@@ -47,6 +55,7 @@ export function IngestQueuePanel({
 				</button>
 			</div>
 			<div className="batch-body ingest-body">
+				{kbPath && <SourceRevisionsPanel key={kbPath} kbPath={kbPath} regenerateTarget={regenerate?.kbPath === kbPath ? regenerate : null} onClearRegenerate={() => setRegenerate(null)} onReadingChange={handleReadingChange} />}
 				<p className="ingest-hint">关闭面板或刷新页面不会取消任务。完成后保留原文并生成素材摘要。</p>
 				<p className="ingest-hint">PDF 请先转换为 Markdown 或文本后再入库。</p>
 				{loading && <p className="ingest-hint" role="status">正在恢复入库任务…</p>}
@@ -83,6 +92,8 @@ export function IngestQueuePanel({
 											{file.error && `：${file.error}`}
 										</div>
 									</div>
+									<div className="flex flex-wrap items-center gap-1">
+									{file.status === "completed" && kbPath && <button type="button" className="ingest-action" onClick={() => setRegenerate({ kbPath: job.kbPath, jobId: job.id, fileId: file.id, name: file.name })} aria-label={`重新生成 ${file.name} 的摘要`}>重新生成</button>}
 									{file.status === "completed" && file.outputPath ? (
 										<button
 											type="button" className="batch-output-btn"
@@ -92,6 +103,7 @@ export function IngestQueuePanel({
 											<ExternalLink className="size-3.5" />
 										</button>
 									) : <span />}
+									</div>
 								</div>
 							))}
 							<div className="ingest-job-actions">
