@@ -20,7 +20,7 @@
     "dev:server": "npm run dev --workspace=@llm-wiki-agent/server",
     "dev:web": "npm run dev --workspace=@llm-wiki-agent/web",
     "quality-and-tests": "node workbench/scripts/run-quality-and-tests.mjs",
-    "test:skill-workflows": "node --test tests/js/skill-retrieval.test.js tests/js/skill-review.test.js tests/js/skill-archive.test.js tests/js/skill-workflows-installed.test.js",
+    "test:skill-workflows": "node tests/run-skill-workflows.js",
     "test:boundaries": "node --import tsx --test workbench/scripts/check-workbench-boundaries.test.mjs",
     "typecheck": "npm run check:boundaries && npm run typecheck --workspaces --if-present"
   },
