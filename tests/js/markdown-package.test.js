@@ -213,7 +213,10 @@ test("detached runtime needs no workbench, package workspace or npm modules", (t
   const root = path.resolve(__dirname, "../..");
   for (const name of ["markdown-package.js", "wikilink-parser.js", "unicode-case-folding.js", "unicode-normalization.js"]) fs.copyFileSync(path.join(root, "scripts/lib", name), path.join(copy, "scripts/lib", name));
   fs.cpSync(path.join(root, "deps/unicode"), path.join(copy, "deps/unicode"), { recursive: true });
-  const script = "const m=require(process.argv[1]);const p=m.inspectPackage(process.argv[2],'note.md');const b=m.capturePackage(process.argv[3],process.argv[4],p);console.log(JSON.stringify(m.verifyPackage(process.argv[3],b).ok));";
+  for (const name of fs.readdirSync(path.join(root, "deps/unicode"))) {
+    assert.deepEqual(fs.readFileSync(path.join(copy, "deps/unicode", name)), fs.readFileSync(path.join(root, "deps/unicode", name)), `copied Unicode data: ${name}`);
+  }
+  const script = "const fs=require('node:fs');for(const op of ['readFileSync','opendirSync','lstatSync','realpathSync']){const fn=fs[op];fs[op]=function(...args){try{return fn.apply(this,args)}catch(e){console.error(JSON.stringify({operation:op,path:args[0],code:e.code,syscall:e.syscall}));throw e}};}const m=require(process.argv[1]);const p=m.inspectPackage(process.argv[2],'note.md');const b=m.capturePackage(process.argv[3],process.argv[4],p);console.log(JSON.stringify(m.verifyPackage(process.argv[3],b).ok));";
   const result = spawnSync(process.execPath, ["-e", script, path.join(copy, "scripts/lib/markdown-package.js"), f.source, f.kb, SOURCE], { cwd: f.temp, encoding: "utf8", timeout: 10_000 });
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), "true");
 });
