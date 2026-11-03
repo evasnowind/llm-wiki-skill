@@ -10,7 +10,7 @@ Based on [Andrej Karpathy](https://karpathy.ai/)'s [llm-wiki methodology](https:
 
 Turn scattered information into a growing, interconnected knowledge base
 
-[![version](https://img.shields.io/badge/v3.6.95-Reviewed%20Source%20Updates-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.96-Skill%20Evidence%20and%20Review-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-multi--platform-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -80,6 +80,8 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 | 📦 | **Zero-config Init** | One sentence to create a full knowledge base with directory structure and templates |
 | 🔗 | **Structured Wiki** | Auto-generates entity pages, topic pages, source summaries with `[[bidirectional links]]` |
 | 🔎 | **Verifiable Retrieval** | The Skill searches keywords, declared aliases, sections, tags and unique links; raw-only mode searches original Markdown/text, with line ranges and content hashes that can be verified again |
+| ✍️ | **Review and Research Writeback** | Persistent issues and reviewable research candidates; explicit adoption checks sources and external edits, updates pages/index/log, and recovers interrupted publication without duplicate records |
+| 🗃️ | **Archive and Restore** | Preserve sources, attachments, wiki and Review history; verify every file against a manifest and restore to a new or empty directory, invalidating caches without changing the global library pointer |
 | 🏷️ | **Confidence Annotation** | EXTRACTED / INFERRED / AMBIGUOUS / UNVERIFIED — see at a glance what needs verification |
 | 🔄 | **Smart Caching** | SHA256 deduplication + write-through cache + self-healing safety net |
 | 🧠 | **Conversation-to-Wiki** | Turn valuable conversations into knowledge base pages directly |
@@ -207,6 +209,7 @@ bash install.sh --upgrade --platform hermes --target-dir <your-skill-dir>/llm-wi
 ### Prerequisites
 
 - Core: your agent can run shell commands and read/write local files
+- Verifiable retrieval and recoverable Review publishing: Node.js `>=22.19.0`; manual search/drafts remain available without Node. Archives require Python 3.8+. These commands need no workbench or npm dependencies.
 - Optional: `uv` for WeChat extraction; `bun` or `npm` for web extraction; Chrome debug mode (port 9222) for authenticated sessions
 
 </details>
@@ -237,6 +240,7 @@ your-knowledge-base/
 ├── index.md                # Index
 ├── log.md                  # Operation log
 ├── .wiki-schema.md         # Config
+├── .wiki-review/           # Issues, candidates and recoverable publication history (created on use)
 └── .wiki-cache.json        # Dedup cache
 ```
 

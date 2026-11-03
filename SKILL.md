@@ -1,7 +1,5 @@
 ---
 name: llm-wiki
-version: 3.6.4
-author: sdyckjq-lab
 license: MIT
 description: |
   个人知识库构建系统（基于 Karpathy llm-wiki 方法论）。让 AI 持续构建和维护你的知识库，
@@ -11,6 +9,8 @@ description: |
   消化、查询、健康检查等操作。不要在用户只是要求"总结这篇文章"时触发——必须是明确的
   知识库相关意图。
 metadata:
+  version: "3.6.96"
+  author: sdyckjq-lab
   hermes:
     tags:
       - knowledge-base
@@ -51,6 +51,8 @@ Scripts located in `scripts/` subdirectory.
 **Path Resolution**:
 1. `SKILL_DIR` = this SKILL.md's directory
 2. Script path = `${SKILL_DIR}/scripts/<script-name>`
+
+**生成链接**：新写入的索引、正文关联和素材引用使用知识库相对路径，例如 `[[wiki/sources/日期-短标题.md|标题]]` 或 `[[wiki/topics/主题.md|主题]]`。原文与摘要常有相同文件名，不要用裸文件名猜目标；已有唯一裸名仍可读取，歧义时先核对实际路径。frontmatter 的 `sources` 原文路径继续遵守素材记录契约。
 
 ---
 
@@ -1128,3 +1130,13 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 - 研究只引用本次核验证据，候选保持衍生标记；未知来源或目标变更阻止采用。
 - 用户明确采用后才更新正式 wiki、根索引和日志；已授权保存不重复确认。
 - 中断使用 `recover` 重放固定发布内容，不重新生成或重复追加日志。
+
+---
+
+## 工作流 12：archive（知识库归档与恢复）
+
+用户要求备份、迁移或恢复知识库时，读 [归档恢复指南](scripts/skill-workflows/archive.md)。导出前执行通用前置检查；恢复时使用用户指定的新目录，不依赖当前全局路径指针。
+
+- 导出、校验和恢复均使用 `archive.sh`／`archive.py`，不启动客户端；归档保存原文、附件、wiki、配置、索引日志及 Review 历史。
+- 输出放在库外；有活动锁或未完成发布时先处理，不打包半发布状态。
+- 恢复先校验再写入新目录或空目录，拒绝覆盖未知文件；恢复后缓存失效重建，全局路径指针保持不变。

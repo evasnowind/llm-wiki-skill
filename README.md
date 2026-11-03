@@ -10,7 +10,7 @@
 
 把碎片化的信息变成持续积累、互相链接的知识库
 
-[![version](https://img.shields.io/badge/v3.6.95-素材更新与摘要候选-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.96-Skill证据与研究回写-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-多平台-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -80,6 +80,8 @@ bash install.sh --platform hermes
 | 📦 | **零配置初始化** | 一句话创建完整知识库，自动生成目录结构、模板和研究方向页 |
 | 🔗 | **结构化 Wiki** | 自动生成实体页、主题页、素材摘要，用 `[[双向链接]]` 互相关联 |
 | 🔎 | **可核验检索** | 纯 Skill 按关键词、同组别名、章节、标签和明确双链检索；可选择只查原始 Markdown／文本，证据包保留行号与内容哈希并支持重新核验 |
+| ✍️ | **Review／研究回写** | 持久跟踪知识问题，研究结果先保存为候选；核对后显式采用，检查来源与外部编辑，更新正式页面、索引日志，并支持中断恢复和重复采用去重 |
+| 🗃️ | **归档与恢复** | 保存原文、附件、wiki 及 Review 历史；manifest 逐文件校验，恢复到新目录或空目录，缓存失效重建，不改变全局库指针 |
 | 🏷️ | **置信度标注** | EXTRACTED / INFERRED / AMBIGUOUS / UNVERIFIED，一眼看出哪些需要核实 |
 | 🔄 | **智能缓存** | SHA256 去重 + 写入即更新 + 自愈安全网，弱模型也不会漏缓存 |
 | 🧠 | **对话结晶** | 把有价值的对话内容直接沉淀为知识库页面 |
@@ -232,6 +234,7 @@ bash install.sh --upgrade --platform hermes --target-dir <你的技能目录>/ll
 ### 前置条件
 
 - 核心：agent 能执行 shell 命令、读写本地文件即可；图谱构建和来源信号覆盖检查需要 `jq` + `node`
+- 可核验检索与 Review 发布恢复：需要 Node.js `>=22.19.0`；没有 Node 时保留手动搜索／草稿流程。归档恢复需要 Python 3.8+；这些命令不需要启动工作台或安装 npm 依赖。
 - 可选：微信公众号提取需要 `uv`；网页提取需要 `bun` 或 `npm`；需要登录态的内容可开启 Chrome 调试端口 9222
 
 </details>
@@ -262,6 +265,7 @@ bash install.sh --upgrade --platform hermes --target-dir <你的技能目录>/ll
 ├── index.md                # 索引
 ├── log.md                  # 操作日志
 ├── .wiki-schema.md         # 配置
+├── .wiki-review/           # 知识问题、候选与可恢复发布记录（使用后生成）
 └── .wiki-cache.json        # 素材去重缓存
 ```
 
