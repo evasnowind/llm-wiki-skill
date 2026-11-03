@@ -127,6 +127,48 @@ test("modified managed index entry is preserved and blocks adoption", (t) => {
   assert.ok(read(root, "index.md").includes("用户改过的标题"));
 });
 
+test("adopted Unicode target is listed by the actual lint runner using a canonical wikilink", (t) => {
+  const root = fixture(t);
+  const staged = candidate(root, { target: "wiki/synthesis/Markdown-对比.md", title: "Markdown [[别名]] | 标题 \\ `代码`" });
+  review.adopt(root, staged.id);
+  const bashOptions = process.platform === "win32"
+    ? [path.join(process.env.ProgramFiles || "C:/Program Files", "Git/bin/bash.exe"), "bash"] : ["bash"];
+  const bash = bashOptions.find((command) => spawnSync(command, ["--version"], { encoding: "utf8" }).status === 0);
+  assert.ok(bash, "Bash or Git Bash is required for the actual lint integration");
+  const result = spawnSync(bash, [path.resolve(__dirname, "../../scripts/lint-runner.sh").replace(/\\/g, "/"), root.replace(/\\/g, "/"), "--json"], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.ok(report.derived.index_resolved_target_paths.includes(staged.target));
+  assert.ok(!report.derived.index_unlisted_paths.includes(staged.target));
+  const indexed = report.warning_report.occurrences.filter((item) => item.source_path === "index.md");
+  assert.equal(indexed.length, 1);
+  assert.equal(indexed[0].resolution.target_path, staged.target);
+});
+
+test("legacy Markdown journal remains recoverable and its exact managed pair migrates on the next adoption", (t) => {
+  const root = fixture(t); const first = candidate(root);
+  assert.throws(() => review.adopt(root, first.id, { afterWrite: () => { throw new Error("crash"); } }), /crash/u);
+  const file = journal(root, first.id);
+  const legacy = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete legacy.indexFormat;
+  const encoded = first.target.split("/").map(encodeURIComponent).join("/");
+  const oldPair = `<!-- review-target:${sha256(first.target).slice(0, 24)} -->\n- [${first.title}](${encoded}) — research / 研究 <!-- review-adopt:${first.id} -->`;
+  const before = legacy.writes[1].beforeContent;
+  legacy.writes[1].content = `${before}${before && !before.endsWith("\n") ? "\n" : ""}\n${oldPair}\n`;
+  legacy.writes[1].afterSha256 = sha256(legacy.writes[1].content);
+  fs.writeFileSync(file, JSON.stringify(legacy));
+  assert.equal(review.recover(root).recovered.length, 1);
+  assert.ok(read(root, "index.md").includes(oldPair));
+  const second = candidate(root, { title: "更新研究", body: "# 新版\n补充原文边界。" });
+  review.adopt(root, second.id);
+  const index = read(root, "index.md");
+  assert.ok(index.includes(`[[${second.target}|更新研究]]`));
+  assert.ok(!index.includes(oldPair));
+  assert.equal((index.match(/<!-- review-target:/gu) || []).length, 1);
+  assert.ok(index.includes("用户编写的条目。\r\n"));
+  assert.equal(review.recover(root).recovered.length, 0);
+});
+
 test("every publication boundary recovers the fixed write-set exactly once and resolves only on complete state write", (t) => {
   for (let boundary = 0; boundary <= 4; boundary += 1) {
     const root = fixture(t); const problem = issue(root); const staged = candidate(root, { issueId: problem.id });
@@ -284,7 +326,7 @@ test("cross-process owner excludes a second publisher and simultaneous attempts 
 
 test("targets reject raw, traversal, Windows reserved names and portable collisions", (t) => {
   const root = fixture(t);
-  for (const target of ["raw/new.md", "../wiki/new.md", "wiki/../new.md", "wiki/CON.md", "wiki/bad?.md", "wiki/bad /new.md", "wiki/.hidden/new.md"]) {
+  for (const target of ["raw/new.md", "../wiki/new.md", "wiki/../new.md", "wiki/CON.md", "wiki/bad?.md", "wiki/bad /new.md", "wiki/.hidden/new.md", "wiki/a#b.md", "wiki/a[b].md"]) {
     assert.throws(() => candidate(root, { target }));
   }
   write(root, "wiki/synthesis/Foo.md", "旧页\n");
