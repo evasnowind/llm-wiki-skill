@@ -16,7 +16,7 @@ function bashCommand() {
   return choices.find((cmd) => spawnSync(cmd, ["--version"], { encoding: "utf8" }).status === 0);
 }
 
-test("installed Skill evidence, research and archive commands run without development dependencies", { timeout: 60_000 }, (t) => {
+test("installed Skill Markdown updates, evidence, research and archive work without development dependencies", { timeout: 90_000 }, (t) => {
   const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "skill installed 中文 ")));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const home = path.join(temp, "home");
@@ -79,6 +79,46 @@ test("installed Skill evidence, research and archive commands run without develo
     assert.ok(fs.readFileSync(path.join(kb, target), "utf8").includes("derived: true"));
     assert.equal(review("recover").recovered.length, 0);
 
+    // Exercise the installed commands, including their dynamically loaded leaves.
+    const source = path.join(temp, `${platform} source 中文`);
+    fs.mkdirSync(path.join(source, "images"), { recursive: true });
+    const original = Buffer.from("---\r\ntags: [Markdown]\r\n---\r\n# Markdown资料\r\n离线资料。\r\n![图](images/a.png)\r\n");
+    fs.writeFileSync(path.join(source, "笔记.md"), original);
+    fs.writeFileSync(path.join(source, "images/a.png"), Buffer.from([0, 255, 13, 10]));
+    assert.ok(fs.existsSync(path.join(installed, "scripts/skill-workflows/markdown.md")));
+    const markdownCli = path.join(installed, "scripts/markdown-cli.js");
+    const markdown = (root, ...args) => {
+      const result = spawnSync(process.execPath, [markdownCli, args[0], root, ...args.slice(1), "--json"], {
+        cwd: temp, env, encoding: "utf8", timeout: 10_000,
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return JSON.parse(result.stdout);
+    };
+    const captured = markdown(kb, "capture", "--source-root", source, "--file", "笔记.md");
+    assert.deepEqual(fs.readFileSync(path.join(kb, captured.binding.primaryPath)), original);
+    const sourceBody = path.join(temp, `${platform}-source-body.md`);
+    fs.writeFileSync(sourceBody, "# 资料摘要\n原文说明离线资料。\n");
+    const sourceCandidate = markdown(kb, "stage", "--id", captured.sourceId, "--revision", captured.binding.revision, "--body", sourceBody);
+    assert.equal(review("adopt", "--id", sourceCandidate.id).status, "adopted");
+    assert.equal(markdown(kb, "capture", "--source-root", source, "--file", "笔记.md").status, "reused");
+    const manual = "\r\n人工笔记 e\u0301；原样保存。\r\n";
+    const sourceTarget = path.join(kb, captured.target);
+    const manualDefault = "\n## 我的补充 / My notes\n\n";
+    const initialText = fs.readFileSync(sourceTarget, "utf8");
+    assert.ok(initialText.includes(manualDefault));
+    fs.writeFileSync(sourceTarget, initialText.replace(manualDefault, manual));
+    fs.writeFileSync(path.join(source, "images/a.png"), Buffer.from([8, 7, 6, 5]));
+    assert.equal(markdown(kb, "scan", "--source-root", source).counts.modified, 1);
+    const changed = markdown(kb, "capture", "--source-root", source, "--file", "笔记.md");
+    assert.equal(changed.sourceId, captured.sourceId);
+    assert.notEqual(changed.binding.revision, captured.binding.revision);
+    fs.writeFileSync(sourceBody, "# 资料摘要\n附件已更新，原文仍为离线资料。\n");
+    const update = markdown(kb, "stage", "--id", changed.sourceId, "--revision", changed.binding.revision, "--body", sourceBody);
+    assert.equal(review("adopt", "--id", update.id).status, "adopted");
+    assert.equal(update.target, captured.target);
+    assert.ok(fs.readFileSync(sourceTarget, "utf8").includes(manual));
+    assert.deepEqual(fs.readFileSync(path.join(kb, captured.binding.primaryPath)), original);
+
     const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"], { encoding: "utf8" }).status === 0);
     assert.ok(python, "Python 3.8+ is required for archive integration");
     const archiveCli = path.join(installed, "scripts/archive.py");
@@ -99,5 +139,15 @@ test("installed Skill evidence, research and archive commands run without develo
     const restoredState = JSON.parse(fs.readFileSync(path.join(restored, ".wiki-review/state.json"), "utf8"));
     assert.equal(restoredState.issues.find((entry) => entry.id === issue.id).status, "resolved");
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(restored, ".wiki-cache.json"), "utf8")), { version: 1, entries: {} });
+    const relocated = path.join(temp, `${platform}-relocated-source`);
+    fs.cpSync(source, relocated, { recursive: true });
+    fs.appendFileSync(path.join(relocated, "笔记.md"), "迁移后追加说明。\r\n");
+    const resumed = markdown(restored, "capture", "--source-root", relocated, "--file", "笔记.md", "--collection", captured.collectionId);
+    assert.equal(resumed.sourceId, captured.sourceId);
+    fs.writeFileSync(sourceBody, "# 资料摘要\n迁移后追加说明，附件仍可阅读。\n");
+    const resumedCandidate = markdown(restored, "stage", "--id", resumed.sourceId, "--revision", resumed.binding.revision, "--body", sourceBody);
+    const adopted = spawnSync(process.execPath, [reviewCli, "adopt", restored, "--id", resumedCandidate.id, "--json"], { cwd: temp, env, encoding: "utf8", timeout: 10_000 });
+    assert.equal(adopted.status, 0, adopted.stderr || adopted.stdout);
+    assert.ok(fs.readFileSync(path.join(restored, captured.target), "utf8").includes(manual));
   }
 });

@@ -4,7 +4,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
-const files = ["skill-retrieval", "skill-review", "skill-archive", "markdown-package", "skill-workflows-installed"]
+const files = ["skill-retrieval", "skill-review", "skill-archive", "markdown-package", "markdown-runtime", "markdown-eligibility", "skill-markdown-review", "skill-workflows-installed"]
   .map((name) => path.join(__dirname, "js", `${name}.test.js`));
 const result = spawnSync(process.execPath, ["--test", ...files], {
   cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: 8 * 60 * 1000,

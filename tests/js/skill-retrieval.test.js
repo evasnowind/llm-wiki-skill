@@ -233,11 +233,12 @@ test("copied runtime operates without packages, workbench or node_modules", (t) 
   const root = fixture(t, { "wiki/a.md": "# 日常\n独立运行资料\n" });
   const install = fs.mkdtempSync(path.join(os.tmpdir(), "skill-query-install-"));
   t.after(() => fs.rmSync(install, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(install, "lib"));
-  for (const relative of ["query-cli.js", "lib/skill-retrieval.js", "lib/wikilink-parser.js"]) {
-    fs.copyFileSync(path.resolve(__dirname, "../../scripts", relative), path.join(install, relative));
-  }
-  const result = spawnSync(process.execPath, [path.join(install, "query-cli.js"), "search", root, "--query", "独立运行", "--json"], { encoding: "utf8" });
+  const installedScripts = path.join(install, "scripts");
+  fs.mkdirSync(installedScripts);
+  fs.copyFileSync(path.resolve(__dirname, "../../scripts/query-cli.js"), path.join(installedScripts, "query-cli.js"));
+  fs.cpSync(path.resolve(__dirname, "../../scripts/lib"), path.join(installedScripts, "lib"), { recursive: true });
+  fs.cpSync(path.resolve(__dirname, "../../deps"), path.join(install, "deps"), { recursive: true });
+  const result = spawnSync(process.execPath, [path.join(installedScripts, "query-cli.js"), "search", root, "--query", "独立运行", "--json"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).evidence.length, 1);
 });
