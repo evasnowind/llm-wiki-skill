@@ -79,6 +79,7 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 | 🎓 | **Local Reading Flow** | Community legend, focus filters, scoped search, the reader drawer, and the selection drawer stay connected to the visible graph; offline HTML keeps selected facts visible too |
 | 📦 | **Zero-config Init** | One sentence to create a full knowledge base with directory structure and templates |
 | 🔗 | **Structured Wiki** | Auto-generates entity pages, topic pages, source summaries with `[[bidirectional links]]` |
+| 🔎 | **Verifiable Retrieval** | The Skill searches keywords, declared aliases, sections, tags and unique links; raw-only mode searches original Markdown/text, with line ranges and content hashes that can be verified again |
 | 🏷️ | **Confidence Annotation** | EXTRACTED / INFERRED / AMBIGUOUS / UNVERIFIED — see at a glance what needs verification |
 | 🔄 | **Smart Caching** | SHA256 deduplication + write-through cache + self-healing safety net |
 | 🧠 | **Conversation-to-Wiki** | Turn valuable conversations into knowledge base pages directly |
