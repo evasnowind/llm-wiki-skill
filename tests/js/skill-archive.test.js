@@ -68,8 +68,10 @@ function readZip(filename) {
 }
 
 function writeZip(filename, entries) {
-  const script = "import sys,zipfile,json,base64\nwith zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as z:\n for e in json.load(sys.stdin):\n  i=zipfile.ZipInfo(e['name']); i.external_attr=e.get('mode',0); z.writestr(i,base64.b64decode(e['data']))\n";
-  const result = spawnSync(python, ["-c", script, filename], { input: JSON.stringify(entries), encoding: "utf8", timeout: 10_000 });
+  const script = "import sys,zipfile,json,base64\npayload=json.loads(sys.stdin.buffer.read().decode('utf-8'))\nwith zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as z:\n for e in payload:\n  i=zipfile.ZipInfo(e['name']); i.external_attr=e.get('mode',0); z.writestr(i,base64.b64decode(e['data']))\n";
+  // Node sends UTF-8 bytes. Exercise the legacy Windows text-stdin case on all
+  // hosts so fixture creation cannot silently depend on the Python locale.
+  const result = spawnSync(python, ["-c", script, filename], { input: JSON.stringify(entries), encoding: "utf8", timeout: 10_000, env: { ...process.env, PYTHONIOENCODING: "ascii:surrogateescape" } });
   assert.equal(result.status, 0, result.stderr);
 }
 
