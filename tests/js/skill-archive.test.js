@@ -418,3 +418,28 @@ test("archive identity checks preserve valid Node evidence packets with fraction
   assert.equal(review.show(target, candidate.id).status, "adopted");
   assert.deepEqual(review.recover(target).recovered, []);
 });
+
+test("archive durability flushes use writable file descriptors as required on Windows", (t) => {
+  const f = fixture(t, true);
+  const target = path.join(f.temp, "writeable-flush-restore");
+  const script = `import importlib.util,sys,os,stat,json
+s=importlib.util.spec_from_file_location('wiki_archive',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+original=m.os.fsync; checks=0
+def fsync(fd):
+ global checks
+ if stat.S_ISREG(os.fstat(fd).st_mode):
+  os.write(fd,b'')
+  checks+=1
+ return original(fd)
+m.os.fsync=fsync
+m.export_archive(sys.argv[2],sys.argv[3],m.DEFAULTS)
+m.verify_archive(sys.argv[3],m.DEFAULTS)
+m.restore_archive(sys.argv[3],sys.argv[4],m.DEFAULTS)
+print(json.dumps({'checks':checks}))
+`;
+  const result = spawnSync(python, ["-B", "-c", script, cli, f.kb, f.zip, target], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(JSON.parse(result.stdout).checks > 0);
+  f.ok("verify", f.zip);
+  assert.deepEqual(fs.readFileSync(path.join(target, "raw/assets/图片.bin")), fs.readFileSync(path.join(f.kb, "raw/assets/图片.bin")));
+});
