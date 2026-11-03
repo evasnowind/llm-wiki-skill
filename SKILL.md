@@ -604,26 +604,14 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    - 如果回答引用了 3 个及以上来源的综合分析，提示用户："是否保存此回答到知识库？"
    - 少于 3 个来源时，默认只做即时回答，不主动建议持久化
 
-6. **重复检测**：
-   - 持久化前，先在 `wiki/queries/` 下搜索同主题页面
-   - 通过 frontmatter tags 和 title 匹配，判断是否已有同主题 query 页面
-   - 如果已有，提示用户是“更新现有页面”还是“新建一页”
-   - 如果用户选择更新旧页面，旧版页面增加 `superseded-by` 标记
+6. **准备保存候选**：
+   - 先在 `wiki/queries/` 中检查同主题 title／tags，由用户选择更新或新建。
+   - 读 [Review／研究回写指南](scripts/skill-workflows/review.md)，用 `templates/query-template.md` 生成候选；新页面路径使用 `wiki/queries/{date}-{short-hash}.md`。
+   - 保留 `type: query`、`derived: true` 和本次证据，使用 `review-cli.js stage`，不直接改正式页面、索引或日志。
 
-7. **保存 query 页面**：
-   - 用 `templates/query-template.md` 生成页面
-   - 保存路径使用 `wiki/queries/{date}-{short-hash}.md`，避免同主题命名冲突
-   - frontmatter 必须包含 `type: query` 和 `derived: true`
-   - `derived: true` 表示这是衍生内容，不是一手素材
-
-8. **自引用防护**：
-   - query 页面在后续 ingest 分析里视为二级来源，不作为主要知识来源
-   - 如果后续页面引用 query 页面里的信息，相关关系统一按 `INFERRED` 处理
-   - ingest 不主动扫描 `wiki/queries/`；只有当前问题确实需要时，才把 query 页面作为补充材料读取
-
-9. **更新索引和日志**：
-   - 保存成功后，在 index.md 中加入 query 条目
-   - 同时在 log.md 中追加一条 query 保存记录
+7. **采用与来源边界**：
+   - 用户明确保存／采用后调用 `adopt`；若本轮已授权保存，不重复确认。采用前检查来源和目标版本，成功后才报告根索引、日志及页面已更新。
+   - 衍生 query 不作为一手来源重新 ingest；后续引用其推论按 `INFERRED` 处理。旧目标与发布记录保留在 Review 状态中，中断按指南恢复。
 
 ---
 
@@ -705,7 +693,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    ```
    （英文版按「输出语言规则」生成，结构相同。）
 
-5. **询问用户**：要自动修复哪些问题？（按 `WIKI_LANG` 用对应语言提问）
+5. **处理问题**：默认只展示报告。用户要求跟踪或研究时，按 [Review 指南](scripts/skill-workflows/review.md) 记录问题及资料版本、生成候选；用户采用后才发布。不能因为候选已生成就将问题标为解决。
 
 ---
 
@@ -779,7 +767,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 
 ## 工作流 7：digest（深度综合报告）
 
-**区别于 query**：query 是快速问答，不生成新页面；digest 是跨素材深度综合，生成持久化报告。
+**区别于 query**：query 默认即时回答，也可按用户要求保存；digest 是跨素材深度综合，通过研究候选生成持久化报告。
 
 ### 触发关键词
 
@@ -792,8 +780,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 执行**通用前置检查**（见上方定义）。如果没有可用知识库，提示用户先初始化。
 
 1. **搜索相关页面**：
-   - **别名展开**：同 query 工作流，先读取 `.wiki-schema.md` 中的"别名词表"展开同义词（不跨组传递，自动去重）
-   - 用 Grep 在 `wiki/` 下搜索所有关键词（原始 + 别名展开），同一别名组命中同一页面只计一次
+   - 同 query，按 [检索指南](scripts/skill-workflows/query.md) 搜索并核验证据；默认 wiki，需要一手依据时明确用 raw 模式
    - 列出将要综合的页面（让用户了解报告覆盖范围）
 
 2. **深度阅读所有相关页面 + 选择输出格式**：
@@ -805,7 +792,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
      - 用户说"时间线"/"按时间"类 → 使用**时间线格式**（见下方模板 C）
      - 其他默认 → 使用**深度报告格式**（见下方模板 A）
 
-3. **生成结构化深度报告**，保存到 `wiki/synthesis/{主题}-{格式}.md`（按 `WIKI_LANG` 切换语言）：
+3. **生成结构化报告候选**，目标为 `wiki/synthesis/{主题}-{格式}.md`（按 `WIKI_LANG` 切换语言），按 [Review 指南](scripts/skill-workflows/review.md) 保留证据与 `derived: true`，先 stage 再采用，不直接覆盖正式文件：
 
    > 文件名规则：默认格式用 `{主题}-深度报告.md`，对比表用 `{主题}-对比.md`，时间线用 `{主题}-时间线.md`
 
@@ -900,9 +887,9 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    > - 如果连年份都不确定，改用**纯文字时间线**（无序列表按时间排序），不用 Mermaid gantt
    > - 如果事件超过 15 个，建议按 section 分组，避免图太长
 
-4. **更新 index.md 和 log.md**：
-   - index.md 的"综合分析"分类下添加新报告条目
-   - log.md 追加：`## {日期} digest | {主题}`
+4. **核对并采用候选**：
+   - 展示报告、目标路径、原版差异和证据覆盖；用户已明确要求生成并保存时可直接采用，否则保留候选待核对。
+   - 通过 `review-cli.js adopt` 更新页面、根 `index.md` 和 `log.md`；失败保留候选／发布记录，按指南恢复，不重新生成。
 
 5. **向用户展示结果**（按 `WIKI_LANG` 切换语言）：
 
@@ -1130,3 +1117,14 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 **输出示例**：
 已创建 wiki/synthesis/sessions/AI-agent-设计决策-20260413.md
 已更新 log.md
+
+---
+
+## 工作流 11：review（知识问题与研究回写）
+
+用户要求“查看待核对问题”“记录这个矛盾”“研究并回写”或“采用这个候选”时，执行通用前置检查，然后读 [Review／研究回写指南](scripts/skill-workflows/review.md)。
+
+- 问题、候选和已采用内容分别保存；研究生成完成不能自动关闭问题。
+- 研究只引用本次核验证据，候选保持衍生标记；未知来源或目标变更阻止采用。
+- 用户明确采用后才更新正式 wiki、根索引和日志；已授权保存不重复确认。
+- 中断使用 `recover` 重放固定发布内容，不重新生成或重复追加日志。
