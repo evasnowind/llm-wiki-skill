@@ -28,11 +28,11 @@ Each source is digested and organized by AI into interlinked wiki pages. Browse 
 
 | Type | Count | View |
 |------|-------|------|
-| Sources | 0 | [[Source Summaries]] |
-| Entities | 0 | [[Entity Pages]] |
-| Topics | 0 | [[Topic Pages]] |
-| Comparisons | 0 | [[Comparisons]] |
-| Synthesis | 0 | [[Synthesis]] |
+| Sources | 0 | [Source Summaries](../index.md#source-summaries) |
+| Entities | 0 | [Entity Pages](../index.md#entity-pages) |
+| Topics | 0 | [Topic Pages](../index.md#topic-pages) |
+| Comparisons | 0 | [Comparisons](../index.md#comparisons) |
+| Synthesis | 0 | [Synthesis](../index.md#synthesis) |
 
 ---
 
