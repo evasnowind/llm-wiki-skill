@@ -40,6 +40,10 @@ HASH = re.compile(r"^[a-f0-9]{64}$")
 KB_ID = re.compile(r"^kb-[a-f0-9]{32}$")
 CANDIDATE = re.compile(r"^candidate-[a-f0-9]{24}$")
 ISSUE = re.compile(r"^issue-[a-f0-9]{24}$")
+MARKDOWN_SOURCE = re.compile(r"^md-[a-f0-9]{24}$")
+MARKDOWN_REVISION = re.compile(r"^rev-[a-f0-9]{64}$")
+MARKDOWN_COLLECTION = re.compile(r"^mdcol-[a-f0-9]{24}$")
+MARKDOWN_REGISTRY = ".wiki-review/markdown-sources.json"
 ISO_TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
 RESERVED = re.compile(r"^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)", re.I)
 
@@ -348,6 +352,62 @@ def inventory(root, limits):
     return sorted(files), sorted(directories), sorted(excluded)
 
 
+def markdown_binding(value):
+    if not version_one(value) or not MARKDOWN_SOURCE.fullmatch(str(value.get("sourceId", ""))) \
+            or not MARKDOWN_REVISION.fullmatch(str(value.get("revision", ""))) \
+            or not HASH.fullmatch(str(value.get("manifestSha256", ""))) \
+            or not HASH.fullmatch(str(value.get("primarySha256", ""))):
+        fail("invalid_markdown_source")
+    base = "raw/markdown/" + value["sourceId"] + "/" + value["revision"]
+    primary = relative_path(value.get("primaryPath"))
+    if value.get("manifestPath") != base + "/manifest.json" or not primary.startswith(base + "/files/") \
+            or not primary.lower().endswith(".md"):
+        fail("invalid_markdown_source")
+    if "readingPath" in value and value["readingPath"] != base + "/reading/" + primary[len(base + "/files/"):]:
+        fail("invalid_markdown_source")
+    if "contentFingerprint" in value and not HASH.fullmatch(str(value["contentFingerprint"])):
+        fail("invalid_markdown_source")
+    return value
+
+
+def markdown_registry(value):
+    if not version_one(value) or not isinstance(value.get("collections"), list) or not isinstance(value.get("sources"), list) \
+            or len(value["collections"]) > 200 or len(value["sources"]) > 2000:
+        fail("invalid_markdown_registry")
+    collections, sources, paths, bindings = set(), set(), set(), []
+    for collection in value["collections"]:
+        if not isinstance(collection, dict) or not MARKDOWN_COLLECTION.fullmatch(str(collection.get("id", ""))) \
+                or not HASH.fullmatch(str(collection.get("rootFingerprint", ""))) or collection["id"] in collections:
+            fail("invalid_markdown_registry")
+        collections.add(collection["id"])
+    for source in value["sources"]:
+        if not isinstance(source, dict) or not MARKDOWN_SOURCE.fullmatch(str(source.get("id", ""))) \
+                or source["id"] in sources or source.get("collectionId") not in collections \
+                or not isinstance(source.get("revisions"), list) or not 1 <= len(source["revisions"]) <= 1000:
+            fail("invalid_markdown_registry")
+        relative_path(source.get("inputPath"))
+        if not source["inputPath"].lower().endswith(".md"):
+            fail("invalid_markdown_registry")
+        path_key = (source["collectionId"], unicodedata.normalize("NFC", source["inputPath"]).lower())
+        if path_key in paths:
+            fail("invalid_markdown_registry")
+        paths.add(path_key)
+        aliases = source.get("aliases", [])
+        if not isinstance(aliases, list) or len(aliases) > 1000:
+            fail("invalid_markdown_registry")
+        for alias in aliases:
+            relative_path(alias)
+        sources.add(source["id"])
+        revisions = set()
+        for binding in source["revisions"]:
+            markdown_binding(binding)
+            if binding["sourceId"] != source["id"] or binding["revision"] in revisions:
+                fail("invalid_markdown_registry")
+            revisions.add(binding["revision"])
+            bindings.append(binding)
+    return bindings
+
+
 def review_candidate(value):
     if not isinstance(value, dict) or not CANDIDATE.fullmatch(str(value.get("id", ""))) or value.get("status") not in ("ready", "adopted"):
         fail("invalid_review_state")
@@ -382,6 +442,12 @@ def review_candidate(value):
     identity = {"title": value["title"], "target": target,
                 "targetBeforeHash": before["sha256"] if before else None,
                 "bodySha256": value["bodySha256"], "packet": packet, "issueId": value.get("issueId")}
+    if "markdownSource" in value:
+        binding = markdown_binding(value["markdownSource"])
+        if target != "wiki/sources/" + binding["sourceId"] + ".md" or packet["mode"] != "raw" \
+                or not any(item["path"] == binding["primaryPath"] and item["fileSha256"] == binding["primarySha256"] for item in packet["evidence"]):
+            fail("invalid_markdown_source")
+        identity["markdownSource"] = binding
     if value["id"] != "candidate-" + identity_hash(identity):
         fail("invalid_review_state")
 
@@ -420,8 +486,69 @@ def review_state(data):
     return value
 
 
-def validate_review(root, files):
+def validate_review(root, files, limits=DEFAULTS):
     state = review_state(read_file(root, STATE, MAX_STATE)) if STATE in files else None
+    bindings = markdown_registry(parse_json(read_file(root, MARKDOWN_REGISTRY, MAX_STATE))) if MARKDOWN_REGISTRY in files else []
+    bindings += [candidate["markdownSource"] for candidate in (state or {}).get("candidates", []) if "markdownSource" in candidate]
+    checked_manifests = set()
+    checked_contents = {}
+    package_bytes = 0
+    file_set = set(files)
+    for binding in bindings:
+        key = (binding["manifestPath"], binding["manifestSha256"])
+        if key in checked_manifests:
+            continue
+        checked_manifests.add(key)
+        if binding["manifestPath"] not in file_set or binding["primaryPath"] not in file_set:
+            fail("incomplete_markdown_package")
+        data = read_file(root, binding["manifestPath"], 4 * 1024 * 1024)
+        if digest(data) != binding["manifestSha256"]:
+            fail("invalid_markdown_manifest")
+        manifest = parse_json(data, "invalid_markdown_manifest")
+        if not version_one(manifest) or manifest.get("format") != "llm-wiki-markdown-package" \
+                or manifest.get("sourceId") != binding["sourceId"] or manifest.get("revision") != binding["revision"] \
+                or not isinstance(manifest.get("files"), list) or not 2 <= len(manifest["files"]) <= 512:
+            fail("invalid_markdown_manifest")
+        base = binding["manifestPath"].rsplit("/", 1)[0]
+        if binding["primaryPath"] != base + "/files/" + relative_path(manifest.get("entry")):
+            fail("invalid_markdown_manifest")
+        declared = {"manifest.json"}
+        originals, readings = set(), set()
+        primary_found = False
+        for record in manifest["files"]:
+            if not isinstance(record, dict) or record.get("kind") not in ("markdown", "asset", "reading") \
+                    or not HASH.fullmatch(str(record.get("sha256", ""))) or type(record.get("size")) is not int \
+                    or not 0 <= record["size"] <= min(64 * 1024 * 1024, limits["max_file_bytes"]):
+                fail("invalid_markdown_manifest")
+            name = relative_path(record.get("path"))
+            source_path = relative_path(record.get("sourcePath"))
+            prefix = "reading/" if record["kind"] == "reading" else "files/"
+            if name != prefix + source_path or base + "/" + name not in file_set:
+                fail("incomplete_markdown_package")
+            if (record["kind"] in ("markdown", "reading")) != source_path.lower().endswith(".md"):
+                fail("invalid_markdown_manifest")
+            if name in declared:
+                fail("invalid_markdown_manifest")
+            declared.add(name)
+            if record["kind"] == "markdown":
+                originals.add(source_path)
+            elif record["kind"] == "reading":
+                readings.add(source_path)
+            if base + "/" + name == binding["primaryPath"]:
+                primary_found = record["kind"] == "markdown" and record["sha256"] == binding["primarySha256"]
+            relative = base + "/" + name
+            if relative not in checked_contents:
+                if package_bytes + record["size"] > limits["max_total_bytes"]:
+                    fail("total_budget_exceeded")
+                with safe_open(root, relative) as stream:
+                    size, sha = stream_hash(stream, record["size"])
+                checked_contents[relative] = (size, sha)
+                package_bytes += size
+            if checked_contents[relative] != (record["size"], record["sha256"]):
+                fail("invalid_markdown_package")
+        actual = {name[len(base) + 1:] for name in file_set if name.startswith(base + "/")}
+        if not primary_found or originals != readings or declared != actual:
+            fail("incomplete_markdown_package")
     committed = {}
     for relative in files:
         if not relative.startswith(".wiki-review/journals/"):
@@ -506,7 +633,7 @@ def export_archive(kb_root, output, limits):
     with review_lock(root):
         knowledge_id = atomic_identity(root)
         files, directories, excluded = inventory(root, limits)
-        validate_review(root, files)
+        validate_review(root, files, limits)
         descriptor, temporary_name = tempfile.mkstemp(prefix=".wiki-archive-", suffix=".zip", dir=output.parent)
         os.close(descriptor)
         temporary = Path(temporary_name)
@@ -703,7 +830,7 @@ def verified_extract(archive_path, staging, limits):
         identity = parse_json(read_file(staging, IDENTITY, 4096), "invalid_identity")
         if not version_one(identity) or identity.get("id") != manifest["knowledgeBaseId"]:
             fail("invalid_identity")
-        validate_review(staging, [entry["path"] for entry in manifest["files"]])
+        validate_review(staging, [entry["path"] for entry in manifest["files"]], limits)
         return manifest, total
 
 

@@ -1,17 +1,18 @@
 "use strict";
 
-// This module intentionally uses only Node built-ins and the standalone parser:
+// This module intentionally uses only Node built-ins and standalone Skill modules:
 // installed Skills do not contain the workbench or its dependencies.
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { TextDecoder } = require("node:util");
 const { parseWikilinks } = require("./wikilink-parser");
+const { validateRelativePath } = require("./review-records");
 
 const DEFAULT_LIMITS = Object.freeze({
   maxFiles: 1500, maxEntries: 10000, maxDepth: 24, maxFileBytes: 2 * 1024 * 1024,
   maxTotalBytes: 20 * 1024 * 1024, maxEvidence: 50, maxOutputChars: 64000,
-  maxPerFile: 3, maxExcerptLines: 16
+  maxPerFile: 3, maxExcerptLines: 16, maxMetadataBytes: 64 * 1024 * 1024
 });
 const MAX_PACKET_BYTES = 2 * 1024 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
@@ -22,13 +23,6 @@ function fail(code) {
   const error = new Error(code);
   error.code = code;
   throw error;
-}
-
-function validateRelativePath(relative) {
-  if (typeof relative !== "string" || !relative || relative.length > 2048
-    || /[\\:\x00-\x1f\x7f]/.test(relative) || relative.startsWith("/")
-    || relative.split("/").some((part) => !part || part === "." || part === "..")) fail("unsafe_path");
-  return relative;
 }
 
 function validateRoot(kbRoot) {
@@ -181,8 +175,8 @@ function groupHits(value, groups) {
   return groups.filter((group) => group.some((term) => matches(lower, term))).length;
 }
 
-function scan(root, mode, limits, coverage) {
-  const files = [];
+function scan(root, mode, limits, coverage, selectedPaths) {
+  const files = [], candidates = [];
   let stopped = false;
   const warn = (code, relative) => {
     coverage.complete = false;
@@ -190,6 +184,11 @@ function scan(root, mode, limits, coverage) {
       coverage.reasons.push({ code, ...(relative ? { path: relative.slice(0, 160) } : {}) });
     }
   };
+  let eligibility;
+  if (fs.existsSync(path.join(root, "raw/markdown")) || fs.existsSync(path.join(root, ".wiki-review/markdown-sources.json"))) {
+    const { createMarkdownEligibility } = require("./markdown-eligibility");
+    eligibility = createMarkdownEligibility(root, { explicit: selectedPaths !== undefined, maxMetadataBytes: limits.maxMetadataBytes, warn });
+  }
   const walk = (relative, depth) => {
     if (stopped) return;
     if (depth > limits.maxDepth) { warn("depth_limit", relative); return; }
@@ -215,28 +214,41 @@ function scan(root, mode, limits, coverage) {
         try { validateRelativePath(child); } catch { warn("unsafe_path"); continue; }
         if (item.isSymbolicLink()) { warn("symlink_refused", child); continue; }
         if (item.isDirectory()) walk(child, depth + 1);
-        else if (item.isFile() && (mode === "wiki" ? /\.md$/iu : /\.(md|txt)$/iu).test(item.name)) {
-          if (coverage.filesScanned >= limits.maxFiles) { warn("file_limit"); stopped = true; break; }
-          coverage.filesScanned += 1;
-          try {
-            const remaining = limits.maxTotalBytes - coverage.bytesRead;
-            if (remaining <= 0) { warn("total_byte_limit"); stopped = true; break; }
-            const size = fs.lstatSync(path.join(root, child)).size;
-            if (size > limits.maxFileBytes || size > remaining) { warn("file_or_byte_limit", child); continue; }
-            // Count attempted reads too: invalid UTF-8 must not bypass the budget.
-            coverage.bytesRead += size;
-            const file = safeReadFile(root, child, Math.min(limits.maxFileBytes, remaining));
-            const document = parseDocument(file.text);
-            if (mode === "raw" && document.derived) { warn("derived_raw_excluded", child); continue; }
-            files.push({ path: child, ...file, document });
-          } catch (error) { warn(error.code === "file_too_large" ? "file_or_byte_limit" : (error.code || "unreadable_file"), child); }
-        }
+        else if (item.isFile() && (mode === "wiki" ? /\.md$/iu : /\.(md|txt)$/iu).test(item.name)) candidates.push(child);
       }
     } catch (error) {
       if (error.code !== "ENOENT") warn("unreadable_directory", relative);
     }
   };
-  walk(mode, 0);
+  if (selectedPaths !== undefined) candidates.push(...selectedPaths);
+  else walk(mode, 0);
+  // Prefer current captured originals before bounded reads of their history.
+  candidates.sort((a, b) => (eligibility ? eligibility.priority(a) - eligibility.priority(b) : 0)
+    || (a < b ? -1 : a > b ? 1 : 0));
+  for (const child of candidates) {
+    if (coverage.filesScanned >= limits.maxFiles) { warn("file_limit"); break; }
+    coverage.filesScanned += 1;
+    try {
+      const remaining = limits.maxTotalBytes - coverage.bytesRead;
+      if (remaining <= 0) { warn("total_byte_limit"); break; }
+      const size = fs.lstatSync(path.join(root, ...child.split("/"))).size;
+      if (size > limits.maxFileBytes || size > remaining) { warn("file_or_byte_limit", child); continue; }
+      coverage.bytesRead += size;
+      const file = safeReadFile(root, child, Math.min(limits.maxFileBytes, remaining));
+      if (eligibility && !eligibility.classify(child, file.sha256)) {
+        if (selectedPaths !== undefined) warn("derived_raw_excluded", child);
+        continue;
+      }
+      const document = parseDocument(file.text);
+      if (mode === "raw" && document.derived) { warn("derived_raw_excluded", child); continue; }
+      files.push({ path: child, ...file, document });
+    } catch (error) { warn(error.code === "file_too_large" ? "file_or_byte_limit" : (error.code || "unreadable_file"), child); }
+  }
+  if (eligibility) {
+    const snapshot = eligibility.snapshot();
+    coverage.metadataBytes = snapshot.metadataBytes;
+    if (Object.keys(snapshot.filtered).length) coverage.filtered = snapshot.filtered;
+  }
   return { files, warn };
 }
 
@@ -247,11 +259,22 @@ function search(kbRoot, options = {}) {
   if (mode !== "wiki" && mode !== "raw") fail("invalid_mode");
   if (typeof query !== "string" || !query.trim() || query.length > 1024) fail("invalid_query");
   const limits = checkedLimits(options.limits);
+  let selectedPaths;
+  if (options.paths !== undefined) {
+    if (!Array.isArray(options.paths) || options.paths.length < 1 || options.paths.length > 50) fail("invalid_paths");
+    selectedPaths = [...new Set(options.paths.map((relative) => {
+      validateRelativePath(relative);
+      if (!relative.startsWith(`${mode}/`) || !(mode === "wiki" ? /\.md$/iu : /\.(md|txt)$/iu).test(relative)) fail("wrong_corpus");
+      return relative;
+    }))];
+    if (JSON.stringify(selectedPaths).length > Math.floor(limits.maxOutputChars / 4)) fail("invalid_paths");
+  }
   const schema = safeReadFile(root, ".wiki-schema.md", limits.maxFileBytes);
   const groups = termsForQuery(query.trim(), schema.text);
   const coverage = { complete: true, filesScanned: 0, entriesScanned: 0, bytesRead: 0, reasons: [] };
-  const { files, warn } = scan(root, mode, limits, coverage);
+  const { files, warn } = scan(root, mode, limits, coverage, selectedPaths);
   const packet = { version: 1, mode, query, coverage, evidence: [] };
+  if (selectedPaths !== undefined) packet.scope = { kind: "paths", paths: selectedPaths };
   for (const file of files) {
     const body = file.document.lines.slice(file.document.bodyStart).join("\n");
     const filename = path.posix.basename(file.path).replace(/\.(md|txt)$/iu, "");
@@ -331,6 +354,11 @@ function verifyPacket(kbRoot, packet) {
     || !Array.isArray(packet.evidence) || packet.evidence.length > DEFAULT_LIMITS.maxEvidence
     || Buffer.byteLength(JSON.stringify(packet)) > MAX_PACKET_BYTES) return invalid();
   const seen = new Set();
+  let eligibility;
+  if (packet.mode === "raw" && fs.existsSync(path.join(root, "raw/markdown"))) {
+    const { createMarkdownEligibility } = require("./markdown-eligibility");
+    eligibility = createMarkdownEligibility(root, { explicit: true });
+  }
   let checked = 0;
   for (const evidence of packet.evidence) {
     let relative;
@@ -345,6 +373,7 @@ function verifyPacket(kbRoot, packet) {
         || evidence.heading.some((item) => typeof item !== "string")) fail("invalid_evidence");
       const file = safeReadFile(root, relative);
       if (file.sha256 !== evidence.fileSha256) fail("source_changed");
+      if (eligibility && !eligibility.classify(relative, file.sha256, { verification: true })) fail("derived_raw_excluded");
       const document = parseDocument(file.text);
       if (packet.mode === "raw" && document.derived) fail("derived_raw_excluded");
       const section = document.sections.find((item) => evidence.startLine - 1 >= item.start && evidence.endLine - 1 <= item.end);
