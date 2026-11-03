@@ -16,8 +16,8 @@ function bashCommand() {
   return choices.find((cmd) => spawnSync(cmd, ["--version"], { encoding: "utf8" }).status === 0);
 }
 
-test("installed Skill evidence and research commands run without development dependencies", { timeout: 60_000 }, (t) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "skill installed 中文 "));
+test("installed Skill evidence, research and archive commands run without development dependencies", { timeout: 60_000 }, (t) => {
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "skill installed 中文 ")));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const home = path.join(temp, "home");
   const kb = path.join(temp, "knowledge");
@@ -78,5 +78,26 @@ test("installed Skill evidence and research commands run without development dep
     assert.equal(fs.readFileSync(path.join(kb, "raw/notes/样本.md"), "utf8"), "# Markdown\r\n原文支持离线阅读。\r\n");
     assert.ok(fs.readFileSync(path.join(kb, target), "utf8").includes("derived: true"));
     assert.equal(review("recover").recovered.length, 0);
+
+    const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"], { encoding: "utf8" }).status === 0);
+    assert.ok(python, "Python 3.8+ is required for archive integration");
+    const archiveCli = path.join(installed, "scripts/archive.py");
+    const archive = (...args) => {
+      const result = spawnSync(python, [archiveCli, ...args, "--json"], {
+        cwd: temp, env, encoding: "utf8", timeout: 10_000,
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return JSON.parse(result.stdout);
+    };
+    const zipped = path.join(temp, `${platform}-archive.zip`);
+    const exported = archive("export", kb, "--output", zipped);
+    assert.equal(archive("verify", zipped).knowledgeBaseId, exported.knowledgeBaseId);
+    const restored = path.join(temp, `${platform}-restored`);
+    assert.equal(archive("restore", zipped, "--target", restored).cacheInvalidated, true);
+    assert.deepEqual(fs.readFileSync(path.join(restored, "raw/notes/样本.md")), fs.readFileSync(path.join(kb, "raw/notes/样本.md")));
+    assert.deepEqual(fs.readFileSync(path.join(restored, target)), fs.readFileSync(path.join(kb, target)));
+    const restoredState = JSON.parse(fs.readFileSync(path.join(restored, ".wiki-review/state.json"), "utf8"));
+    assert.equal(restoredState.issues.find((entry) => entry.id === issue.id).status, "resolved");
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(restored, ".wiki-cache.json"), "utf8")), { version: 1, entries: {} });
   }
 });
