@@ -165,6 +165,17 @@ def absolute_safe(value):
     return target
 
 
+def is_within(root, candidate, paths=os.path):
+    # Resolve existing ancestors (including Windows 8.3 names) and normalize
+    # Windows casing before comparing. The caller first rejects symlinks.
+    root = paths.normcase(paths.realpath(root))
+    candidate = paths.normcase(paths.realpath(candidate))
+    try:
+        return paths.commonpath([root, candidate]) == root
+    except ValueError:  # Different Windows drives cannot be nested.
+        return False
+
+
 def root_path(value):
     root = absolute_safe(value)
     if not root.is_dir():
@@ -485,11 +496,7 @@ def stream_hash(stream, maximum, destination=None):
 def export_archive(kb_root, output, limits):
     root = root_path(kb_root)
     output = absolute_safe(output)
-    try:
-        inside = os.path.commonpath([root, output]) == os.fspath(root)
-    except ValueError:  # Different Windows drives cannot be nested.
-        inside = False
-    if inside:
+    if is_within(root, output):
         fail("output_inside_knowledge_base")
     if output.exists():
         fail("output_exists")
@@ -649,6 +656,11 @@ def verified_extract(archive_path, staging, limits):
             fail("entry_budget_exceeded")
         by_name, keys = {}, set()
         for info in infos:
+            # ZipInfo preserves the decoded on-disk name in orig_filename but
+            # normalizes backslashes in filename on Windows. Validate first.
+            original = info.orig_filename
+            if original != MANIFEST:
+                relative_path(original[:-1] if original.endswith("/") else original)
             if info.filename in by_name:
                 fail("duplicate_zip_entry")
             key = portable_key(info.filename.rstrip("/"))
