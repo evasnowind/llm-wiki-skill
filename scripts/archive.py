@@ -534,7 +534,9 @@ def export_archive(kb_root, output, limits):
                     size, sha = stream_hash(stream, limits["max_file_bytes"])
                 if size != entry["size"] or sha != entry["sha256"]:
                     fail("source_changed")
-            with open(temporary, "rb") as stream:
+            # Windows FlushFileBuffers requires write access to the handle.
+            # Reopen the completed ZIP without truncation before syncing it.
+            with open(temporary, "r+b") as stream:
                 os.fsync(stream.fileno())
             # Hard-link publication is atomic and cannot overwrite an existing
             # archive, unlike rename on POSIX. Both paths are on the same disk.
