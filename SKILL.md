@@ -9,7 +9,7 @@ description: |
   消化、查询、健康检查等操作。不要在用户只是要求"总结这篇文章"时触发——必须是明确的
   知识库相关意图。
 metadata:
-  version: "3.6.96"
+  version: "3.6.97"
   author: sdyckjq-lab
   hermes:
     tags:
@@ -37,10 +37,11 @@ llm-wiki 帮你构建一个**持续增长的个人知识库**。它不是传统�
 
 ## 快速开始
 
-告诉用户这两步就够了：
+首次使用只需两步，后续可主动检查资料更新：
 
 1. **初始化**：说"帮我初始化一个知识库"
 2. **添加素材**：给一个链接或文件，说"帮我消化这篇"
+3. **更新 Markdown**：说"检查这个 Markdown 文件夹的变化"，选中变化后更新已有资料摘要
 
 ---
 
@@ -313,6 +314,8 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 **本地文件**：
 - 统一走 `bash ${SKILL_DIR}/scripts/source-registry.sh match-file "<path>"`
 - 命中后直接读取，不调用外挂
+- 本地 Markdown（`.md`，含大写扩展名）优先读 [Markdown 保真入库与更新](scripts/skill-workflows/markdown.md)：先捕获原文、附件与阅读副本，再通过固定资料身份生成并采用摘要候选。该分支不再按日期复制第二份原文，也不另外调用 `create-source-page.sh` 写同一摘要；原文、来源版本与发布由新脚本核对。
+- 摘要采用后，完整处理需要的实体／主题整理仍按下方流程继续；不要把摘要已采用说成全部知识整理已自动完成。其他来源沿用既有步骤。
 
 **纯文本粘贴**：
 - 统一视为 `plain_text`
@@ -1140,3 +1143,14 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 - 导出、校验和恢复均使用 `archive.sh`／`archive.py`，不启动客户端；归档保存原文、附件、wiki、配置、索引日志及 Review 历史。
 - 输出放在库外；有活动锁或未完成发布时先处理，不打包半发布状态。
 - 恢复先校验再写入新目录或空目录，拒绝覆盖未知文件；恢复后缓存失效重建，全局路径指针保持不变。
+
+---
+
+## 工作流 13：Markdown 资料更新
+
+用户要求“检查 Markdown 文件夹变化”“更新这份笔记”“笔记改名后重新整理”时，执行通用前置检查，并读 [Markdown 指南](scripts/skill-workflows/markdown.md)。
+
+- 手动扫描来源目录，不启动监听；先展示新增、修改、改名、删除、未变化和无法确认项。
+- 只为选中的变化保存固定素材版本、生成摘要候选；已有健康摘要且资料未变时直接复用。
+- 稳定 sourceId 决定摘要路径，改名和日期变化不重复建档；原文删除只提示，库内资料与历史保留。
+- 人工补充区原样保留，区外未知编辑拒绝覆盖；采用、恢复和归档沿用现有 Review 与 archive 指引。
