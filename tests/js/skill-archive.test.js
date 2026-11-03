@@ -68,7 +68,7 @@ function readZip(filename) {
 }
 
 function writeZip(filename, entries) {
-  const script = "import sys,zipfile,json,base64\npayload=json.loads(sys.stdin.buffer.read().decode('utf-8'))\nwith zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as z:\n for e in payload:\n  i=zipfile.ZipInfo(e['name']); i.external_attr=e.get('mode',0); z.writestr(i,base64.b64decode(e['data']))\n";
+  const script = "import sys,zipfile,json,base64\npayload=json.loads(sys.stdin.buffer.read().decode('utf-8'))\nwith zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as z:\n for e in payload:\n  i=zipfile.ZipInfo(e['name']); i.filename=e['name']; i.orig_filename=e['name']; i.external_attr=e.get('mode',0); z.writestr(i,base64.b64decode(e['data']))\n";
   // Node sends UTF-8 bytes. Exercise the legacy Windows text-stdin case on all
   // hosts so fixture creation cannot silently depend on the Python locale.
   const result = spawnSync(python, ["-c", script, filename], { input: JSON.stringify(entries), encoding: "utf8", timeout: 10_000, env: { ...process.env, PYTHONIOENCODING: "ascii:surrogateescape" } });
@@ -187,6 +187,7 @@ test("unsafe ZIP names, symlinks and portable directory/file collisions are refu
     const entries = structuredClone(original);
     entries.push({ name, data: Buffer.from("escape").toString("base64") });
     const bad = path.join(f.temp, `unsafe-${index}.zip`); writeZip(bad, entries);
+    if (name.includes("\\")) assert.ok(fs.readFileSync(bad).includes(Buffer.from(name)), "fixture must preserve the raw ZIP backslash name");
     f.reject(["verify", bad], "unsafe_path");
   }
   const symlink = structuredClone(original);
@@ -444,4 +445,54 @@ print(json.dumps({'checks':checks}))
   assert.ok(JSON.parse(result.stdout).checks > 0);
   f.ok("verify", f.zip);
   assert.deepEqual(fs.readFileSync(path.join(target, "raw/assets/图片.bin")), fs.readFileSync(path.join(f.kb, "raw/assets/图片.bin")));
+});
+
+test("archive containment resolves Windows case and short-name aliases before comparison", (t) => {
+  const f = fixture(t);
+  const script = `import importlib.util,sys,ntpath,types,json
+s=importlib.util.spec_from_file_location('wiki_archive',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+assert m.is_within(r'C:\\Users\\RunnerAdmin\\Knowledge', r'c:\\users\\runneradmin\\knowledge\\backup.zip', ntpath)
+assert not m.is_within(r'C:\\Users\\RunnerAdmin\\Knowledge', r'C:\\Users\\RunnerAdmin\\Knowledge-other\\backup.zip', ntpath)
+assert not m.is_within(r'C:\\Knowledge', r'D:\\Knowledge\\backup.zip', ntpath)
+aliases=types.SimpleNamespace(normcase=ntpath.normcase,commonpath=ntpath.commonpath,realpath=lambda value: str(value).replace('RUNNER~1','RunnerAdmin').replace('KNOWLE~1','Knowledge Base'))
+assert m.is_within(r'C:\\Users\\RunnerAdmin\\Knowledge Base', r'C:\\Users\\RUNNER~1\\KNOWLE~1\\backup.zip', aliases)
+print(json.dumps({'ok':True}))
+`;
+  const result = spawnSync(python, ["-B", "-c", script, cli], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  if (process.platform === "win32") {
+    const aliasScript = "import sys,ctypes,json; k=ctypes.windll.kernel32; f=k.GetShortPathNameW; f.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_uint]; f.restype=ctypes.c_uint; b=ctypes.create_unicode_buffer(32768); n=f(sys.argv[1],b,len(b)); print(json.dumps(b.value if n else sys.argv[1]))";
+    const short = spawnSync(python, ["-c", aliasScript, f.kb], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(short.status, 0, short.stderr);
+    const shortRoot = JSON.parse(short.stdout);
+    f.reject(["export", shortRoot, "--output", path.join(f.kb, "short-alias-backup.zip")], "output_inside_knowledge_base");
+    const mixedCaseRoot = f.kb.replace(/[a-zA-Z]/g, (letter) => letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase());
+    f.reject(["export", mixedCaseRoot, "--output", path.join(shortRoot, "case-alias-backup.zip")], "output_inside_knowledge_base");
+  }
+  assert.equal(fs.existsSync(path.join(f.kb, ".wiki-review")), false, "inside-KB rejection must happen before identity/lock creation");
+});
+
+test("raw ZIP names are rejected before ZipInfo host separator normalization", (t) => {
+  const f = fixture(t);
+  f.ok("export", f.kb, "--output", f.zip);
+  const entries = readZip(f.zip);
+  entries.push({ name: "raw\\escape.md", data: Buffer.from("unsafe").toString("base64") });
+  const bad = path.join(f.temp, "raw-backslash.zip"); writeZip(bad, entries);
+  assert.ok(fs.readFileSync(bad).includes(Buffer.from("raw\\escape.md")));
+  const script = `import importlib.util,sys
+s=importlib.util.spec_from_file_location('wiki_archive',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+original=m.zipfile.ZipFile
+class NormalizingZipFile(original):
+ def infolist(self):
+  infos=super().infolist()
+  for info in infos: info.filename=info.filename.replace(chr(92),'/')
+  return infos
+m.zipfile.ZipFile=NormalizingZipFile
+try: m.verify_archive(sys.argv[2],m.DEFAULTS)
+except m.ArchiveError as error: print(str(error));sys.exit(3)
+`;
+  const result = spawnSync(python, ["-B", "-c", script, cli, bad], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 3, result.stderr || result.stdout);
+  assert.equal(result.stdout.trim(), "unsafe_path");
+  f.reject(["verify", bad], "unsafe_path");
 });
