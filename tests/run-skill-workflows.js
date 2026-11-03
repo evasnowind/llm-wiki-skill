@@ -30,19 +30,5 @@ if (result.status !== 0 && process.env.GITHUB_ACTIONS === "true") {
   for (let offset = 0; offset < tail.length; offset += 3000) {
     annotate(`Skill test details ${offset / 3000 + 1}`, tail.slice(offset, offset + 3000));
   }
-  // A native Windows abort can lose buffered test-worker output. Run the
-  // affected files directly for diagnostics; the original failure still wins.
-  if (process.platform === "win32") {
-    for (const name of ["markdown-package", "markdown-runtime", "skill-workflows-installed"]) {
-      const diagnostic = spawnSync(process.execPath, [path.join(__dirname, "js", `${name}.test.js`)], {
-        cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 90_000,
-        env: { ...process.env, LLM_WIKI_TEST_DIAGNOSTICS: "1" },
-      });
-      const output = `status:${diagnostic.status}\n${diagnostic.stdout || ""}\n${diagnostic.stderr || ""}`;
-      process.stdout.write(output);
-      const excerpt = output.slice(-12000);
-      for (let offset = 0; offset < excerpt.length; offset += 3000) annotate(`${name} diagnostic ${offset / 3000 + 1}`, excerpt.slice(offset, offset + 3000));
-    }
-  }
 }
 process.exitCode = result.status === 0 ? 0 : 1;

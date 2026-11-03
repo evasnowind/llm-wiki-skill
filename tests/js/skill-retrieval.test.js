@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const { copyFixture } = require("./helpers/copy-fixture");
 const { spawnSync } = require("node:child_process");
 const { search, verifyPacket, sha256, safeReadFile, validateRoot } = require("../../scripts/lib/skill-retrieval");
 
@@ -236,8 +237,8 @@ test("copied runtime operates without packages, workbench or node_modules", (t) 
   const installedScripts = path.join(install, "scripts");
   fs.mkdirSync(installedScripts);
   fs.copyFileSync(path.resolve(__dirname, "../../scripts/query-cli.js"), path.join(installedScripts, "query-cli.js"));
-  fs.cpSync(path.resolve(__dirname, "../../scripts/lib"), path.join(installedScripts, "lib"), { recursive: true });
-  fs.cpSync(path.resolve(__dirname, "../../deps"), path.join(install, "deps"), { recursive: true });
+  copyFixture(path.resolve(__dirname, "../../scripts/lib"), path.join(installedScripts, "lib"));
+  copyFixture(path.resolve(__dirname, "../../deps"), path.join(install, "deps"));
   const result = spawnSync(process.execPath, [path.join(installedScripts, "query-cli.js"), "search", root, "--query", "独立运行", "--json"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).evidence.length, 1);

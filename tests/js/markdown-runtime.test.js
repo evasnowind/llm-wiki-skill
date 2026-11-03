@@ -5,7 +5,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { test, beforeEach } = require("node:test");
+const { test } = require("node:test");
+const { copyFixture } = require("./helpers/copy-fixture");
 const runtime = require("../../scripts/lib/markdown-runtime");
 const state = require("../../scripts/lib/markdown-state");
 const review = require("../../scripts/lib/skill-review");
@@ -15,7 +16,6 @@ const { search, verifyPacket } = require("../../scripts/lib/skill-retrieval");
 
 const cli = path.resolve(__dirname, "../../scripts/markdown-cli.js");
 const archive = path.resolve(__dirname, "../../scripts/archive.py");
-beforeEach((t) => { if (process.env.LLM_WIKI_TEST_DIAGNOSTICS === "1") fs.writeSync(2, `Markdown test: ${t.name}\n`); });
 function write(root, name, content) { const target = path.join(root, name); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, content); }
 function read(root, name) { return fs.readFileSync(path.join(root, name), "utf8"); }
 function code(value) { return (error) => error.code === value; }
@@ -308,7 +308,7 @@ test("archive restore retains source identity and explicitly rebinds a relocated
     const result = spawnSync(python, [archive, ...args, "--json"], { encoding: "utf8", timeout: 15_000, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
-  fs.cpSync(f.source, relocated, { recursive: true });
+  copyFixture(f.source, relocated);
   const scan = runtime.scan(restored, { sourceRoot: relocated, collection: first.captured.collectionId });
   assert.equal(scan.requiresRebind, true); assert.equal(scan.counts.unchanged, 1);
   const rebound = runtime.capture(restored, { sourceRoot: relocated, file: "notes/a.md", collection: first.captured.collectionId });

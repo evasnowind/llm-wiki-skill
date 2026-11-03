@@ -6,9 +6,9 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
+const { copyFixture } = require("./helpers/copy-fixture");
 
 const repo = path.resolve(__dirname, "../..");
-const trace = (message) => { if (process.env.LLM_WIKI_TEST_DIAGNOSTICS === "1") fs.writeSync(2, `Installed test: ${message}\n`); };
 
 function bashCommand() {
   const choices = process.platform === "win32"
@@ -34,7 +34,6 @@ test("installed Skill Markdown updates, evidence, research and archive work with
   assert.ok(bash, "Git Bash or Bash is required to exercise the real installer");
   const env = { ...process.env, HOME: home, USERPROFILE: home, PYTHONIOENCODING: "utf-8" };
   for (const platform of ["codex", "claude"]) {
-    trace(`${platform} install`);
     const installed = path.join(temp, `${platform} skills`, "llm-wiki");
     const result = spawnSync(bash, [path.join(repo, "install.sh").replace(/\\/g, "/"), "--platform", platform, "--target-dir", installed.replace(/\\/g, "/")], {
       cwd: temp, env, encoding: "utf8", timeout: 25_000,
@@ -62,7 +61,6 @@ test("installed Skill Markdown updates, evidence, research and archive work with
 
     const reviewCli = path.join(installed, "scripts/review-cli.js");
     const review = (...args) => {
-      trace(`${platform} review ${args[0]}`);
       const result = spawnSync(process.execPath, [reviewCli, args[0], kb, ...args.slice(1), "--json"], {
         cwd: temp, env, encoding: "utf8", timeout: 10_000,
       });
@@ -91,7 +89,6 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.ok(fs.existsSync(path.join(installed, "scripts/skill-workflows/markdown.md")));
     const markdownCli = path.join(installed, "scripts/markdown-cli.js");
     const markdown = (root, ...args) => {
-      trace(`${platform} markdown ${args[0]}`);
       const result = spawnSync(process.execPath, [markdownCli, args[0], root, ...args.slice(1), "--json"], {
         cwd: temp, env, encoding: "utf8", timeout: 10_000,
       });
@@ -127,7 +124,6 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.ok(python, "Python 3.8+ is required for archive integration");
     const archiveCli = path.join(installed, "scripts/archive.py");
     const archive = (...args) => {
-      trace(`${platform} archive ${args[0]}`);
       const result = spawnSync(python, [archiveCli, ...args, "--json"], {
         cwd: temp, env, encoding: "utf8", timeout: 10_000,
       });
@@ -145,7 +141,7 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.equal(restoredState.issues.find((entry) => entry.id === issue.id).status, "resolved");
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(restored, ".wiki-cache.json"), "utf8")), { version: 1, entries: {} });
     const relocated = path.join(temp, `${platform}-relocated-source`);
-    fs.cpSync(source, relocated, { recursive: true });
+    copyFixture(source, relocated);
     fs.appendFileSync(path.join(relocated, "笔记.md"), "迁移后追加说明。\r\n");
     const resumed = markdown(restored, "capture", "--source-root", relocated, "--file", "笔记.md", "--collection", captured.collectionId);
     assert.equal(resumed.sourceId, captured.sourceId);

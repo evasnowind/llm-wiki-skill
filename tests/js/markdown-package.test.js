@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
+const { copyFixture } = require("./helpers/copy-fixture");
 const modulePath = path.resolve(__dirname, "../../scripts/lib/markdown-package.js");
 const { inspectPackage, capturePackage, verifyPackage, readSafeBinary, validateBinding, sha256 } = require(modulePath);
 const SOURCE = `md-${"1".repeat(24)}`;
@@ -212,11 +213,11 @@ test("detached runtime needs no workbench, package workspace or npm modules", (t
   const copy = path.join(f.temp, "installed"); fs.mkdirSync(path.join(copy, "scripts/lib"), { recursive: true });
   const root = path.resolve(__dirname, "../..");
   for (const name of ["markdown-package.js", "wikilink-parser.js", "unicode-case-folding.js", "unicode-normalization.js"]) fs.copyFileSync(path.join(root, "scripts/lib", name), path.join(copy, "scripts/lib", name));
-  fs.cpSync(path.join(root, "deps/unicode"), path.join(copy, "deps/unicode"), { recursive: true });
+  copyFixture(path.join(root, "deps/unicode"), path.join(copy, "deps/unicode"));
   for (const name of fs.readdirSync(path.join(root, "deps/unicode"))) {
     assert.deepEqual(fs.readFileSync(path.join(copy, "deps/unicode", name)), fs.readFileSync(path.join(root, "deps/unicode", name)), `copied Unicode data: ${name}`);
   }
-  const script = "const fs=require('node:fs');for(const op of ['readFileSync','opendirSync','lstatSync','realpathSync']){const fn=fs[op];fs[op]=function(...args){try{return fn.apply(this,args)}catch(e){console.error(JSON.stringify({operation:op,path:args[0],code:e.code,syscall:e.syscall}));throw e}};}const m=require(process.argv[1]);const p=m.inspectPackage(process.argv[2],'note.md');const b=m.capturePackage(process.argv[3],process.argv[4],p);console.log(JSON.stringify(m.verifyPackage(process.argv[3],b).ok));";
+  const script = "const m=require(process.argv[1]);const p=m.inspectPackage(process.argv[2],'note.md');const b=m.capturePackage(process.argv[3],process.argv[4],p);console.log(JSON.stringify(m.verifyPackage(process.argv[3],b).ok));";
   const result = spawnSync(process.execPath, ["-e", script, path.join(copy, "scripts/lib/markdown-package.js"), f.source, f.kb, SOURCE], { cwd: f.temp, encoding: "utf8", timeout: 10_000 });
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), "true");
 });
