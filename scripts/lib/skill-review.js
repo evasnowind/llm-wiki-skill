@@ -26,7 +26,7 @@ function text(value, maximum, code = "invalid_arguments") {
 function targetPath(value) {
   validateRelativePath(value);
   if (!/^wiki\/.+\.md$/u.test(value) || value.split("/").some((part) => part.startsWith(".")
-    || /[<>"|?*]/u.test(part) || /[. ]$/u.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part))) fail("invalid_target");
+    || /[<>"|?*\[\]#]/u.test(part) || /[. ]$/u.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part))) fail("invalid_target");
   return value;
 }
 
@@ -269,23 +269,32 @@ function appendRecord(before, entry) {
   return `${content}${content && !content.endsWith("\n") ? "\n" : ""}\n${entry}\n`;
 }
 
-function indexEntry(candidate) {
-  const label = candidate.title.replace(/[\[\]\r\n]/gu, " ");
-  const link = candidate.target.split("/").map(encodeURIComponent).join("/");
-  return `<!-- review-target:${sha256(candidate.target).slice(0, 24)} -->\n- [${label}](${link}) — research / 研究 <!-- review-adopt:${candidate.id} -->`;
+function indexEntry(candidate, format = "wikilink-v1") {
+  const marker = `<!-- review-target:${sha256(candidate.target).slice(0, 24)} -->`;
+  const adopted = `<!-- review-adopt:${candidate.id} -->`;
+  if (format === "markdown-v1") {
+    const label = candidate.title.replace(/[\[\]\r\n]/gu, " ");
+    const link = candidate.target.split("/").map(encodeURIComponent).join("/");
+    return `${marker}\n- [${label}](${link}) — research / 研究 ${adopted}`;
+  }
+  const label = candidate.title.replace(/[\\\[\]|`\r\n]/gu, " ");
+  return `${marker}\n- [[${candidate.target}|${label}]] — research / 研究 ${adopted}`;
 }
 
-function updatedIndex(before, state, candidate) {
+function updatedIndex(before, state, candidate, format = "wikilink-v1") {
   const content = before?.content || "";
   const marker = `<!-- review-target:${sha256(candidate.target).slice(0, 24)} -->`;
-  if (!content.includes(marker)) return appendRecord(before, indexEntry(candidate));
+  if (!content.includes(marker)) return appendRecord(before, indexEntry(candidate, format));
   const previous = [...state.candidates].reverse().find((item) => item.status === "adopted" && item.target === candidate.target);
   if (!previous) fail("index_managed_entry_changed");
-  const old = indexEntry(previous);
+  // Existing managed Markdown pairs are migrated only if the full pair is
+  // unchanged. User-authored index text remains outside this replacement.
+  const old = [indexEntry(previous, "wikilink-v1"), indexEntry(previous, "markdown-v1")].find((entry) => content.includes(entry));
+  if (!old) fail("index_managed_entry_changed");
   const offset = content.indexOf(old);
   if (offset < 0 || content.indexOf(marker, content.indexOf(marker) + marker.length) >= 0
     || (offset > 0 && content[offset - 1] !== "\n") || (content[offset + old.length] && content[offset + old.length] !== "\n")) fail("index_managed_entry_changed");
-  return content.slice(0, offset) + indexEntry(candidate) + content.slice(offset + old.length);
+  return content.slice(0, offset) + indexEntry(candidate, format) + content.slice(offset + old.length);
 }
 
 function createJournal(root, state, candidate) {
@@ -303,7 +312,7 @@ function createJournal(root, state, candidate) {
   const stateBefore = readOptional(root, STATE);
   const label = candidate.title.replace(/[\[\]\r\n]/gu, " ");
   const marker = `<!-- review-adopt:${candidate.id} -->`;
-  const journal = { version: 1, candidateId: candidate.id, target: candidate.target, createdAt: adoptedAt, committed: false,
+  const journal = { version: 1, indexFormat: "wikilink-v1", candidateId: candidate.id, target: candidate.target, createdAt: adoptedAt, committed: false,
     candidate: clone(candidate), writes: [
       makeWrite(candidate.target, candidate.targetBefore, candidate.content),
       makeWrite("index.md", indexBefore, updatedIndex(indexBefore, state, candidate)),
@@ -316,6 +325,7 @@ function createJournal(root, state, candidate) {
 
 function validateJournal(journal) {
   if (!journal || journal.version !== 1 || typeof journal.committed !== "boolean" || !CANDIDATE.test(journal.candidateId)
+    || (journal.indexFormat !== undefined && journal.indexFormat !== "wikilink-v1")
     || typeof journal.createdAt !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(journal.createdAt)
     || !Array.isArray(journal.writes) || journal.writes.length !== 4) fail("invalid_journal");
   validateCandidate(journal.candidate);
@@ -338,7 +348,9 @@ function validateJournal(journal) {
   const before = (index) => journal.writes[index].beforeContent === null ? null : { content: journal.writes[index].beforeContent };
   let expectedState;
   try { expectedState = validateState(JSON.parse(journal.writes[3].beforeContent)); } catch { fail("invalid_journal"); }
-  if (journal.writes[1].content !== updatedIndex(before(1), expectedState, journal.candidate)
+  // The absent field identifies already-persisted v1 Markdown journals. Their
+  // fixed write-set must remain replayable; new publications use wikilinks.
+  if (journal.writes[1].content !== updatedIndex(before(1), expectedState, journal.candidate, journal.indexFormat || "markdown-v1")
     || journal.writes[2].content !== appendRecord(before(2), `${marker}\n## ${journal.createdAt.slice(0, 10)} research | ${label}\n\nAdopted ${journal.candidateId}: ${journal.target}`)) fail("invalid_journal");
   const expectedCandidate = expectedState.candidates.find((item) => item.id === journal.candidateId);
   if (!expectedCandidate || JSON.stringify(expectedCandidate) !== JSON.stringify(journal.candidate)) fail("invalid_journal");
