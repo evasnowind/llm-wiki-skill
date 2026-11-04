@@ -34,7 +34,19 @@ function fixture(t, withReview = false) {
     const issue = review.add(kb, { type: "unverified", title: "核对", reason: "核对资料", paths: ["raw/notes/样本.md"], packet });
     const adopted = review.stage(kb, { title: "研究", target: "wiki/synthesis/研究.md", body: "# 研究\n可以离线保存。", packet, issueId: issue.id });
     review.adopt(kb, adopted.id);
-    review.stage(kb, { title: "待采用", target: "wiki/queries/待采用.md", body: "# 待采用\n候选不改变正式文件。", packet });
+    // Keep this existing fixture in the released v1 hot-only layout. New
+    // publishers may compact terminal records while staging the next item;
+    // history round-trips have their own lifecycle integration fixtures.
+    const statePath = path.join(kb, ".wiki-review/state.json");
+    const legacyState = JSON.parse(fs.readFileSync(statePath));
+    const journalPath = path.join(kb, `.wiki-review/journals/${adopted.id}.json`);
+    const legacyJournal = fs.readFileSync(journalPath);
+    const ready = review.stage(kb, { title: "待采用", target: "wiki/queries/待采用.md", body: "# 待采用\n候选不改变正式文件。", packet });
+    legacyState.candidates.push(ready);
+    fs.rmSync(path.join(kb, ".wiki-review/history"), { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(journalPath), { recursive: true });
+    fs.writeFileSync(journalPath, legacyJournal);
+    fs.writeFileSync(statePath, `${JSON.stringify(legacyState, null, 2)}\n`);
   }
   const run = (...args) => spawnSync(python, [cli, ...args, "--json"], { encoding: "utf8", timeout: 20_000, env: { ...process.env, HOME: temp, USERPROFILE: temp, PYTHONIOENCODING: "utf-8" } });
   const ok = (...args) => {

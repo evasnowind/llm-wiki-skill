@@ -17,7 +17,7 @@ function bashCommand() {
   return choices.find((cmd) => spawnSync(cmd, ["--version"], { encoding: "utf8" }).status === 0);
 }
 
-test("installed Skill Markdown updates, evidence, research and archive work without development dependencies", { timeout: 90_000 }, (t) => {
+test("installed Skill freshness, lifecycle, Markdown updates and archive work without development dependencies", { timeout: 90_000 }, (t) => {
   const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "skill installed 中文 ")));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const home = path.join(temp, "home");
@@ -60,13 +60,14 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.equal(JSON.parse(verified.stdout).ok, true);
 
     const reviewCli = path.join(installed, "scripts/review-cli.js");
-    const review = (...args) => {
-      const result = spawnSync(process.execPath, [reviewCli, args[0], kb, ...args.slice(1), "--json"], {
+    const reviewAt = (root, ...args) => {
+      const result = spawnSync(process.execPath, [reviewCli, args[0], root, ...args.slice(1), "--json"], {
         cwd: temp, env, encoding: "utf8", timeout: 10_000,
       });
       assert.equal(result.status, 0, result.stderr || result.stdout);
       return JSON.parse(result.stdout);
     };
+    const review = (...args) => reviewAt(kb, ...args);
     const issue = review("add", "--type", "unverified", "--title", `${platform} 原文核对`, "--reason", "核对离线阅读能力", "--path", "raw/notes/样本.md", "--packet", packetPath);
     const body = path.join(temp, `${platform}-research.md`);
     fs.writeFileSync(body, `# 原文核对\n原文支持离线阅读。证据：${packet.evidence[0].id}\n`);
@@ -108,6 +109,25 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     const initialText = fs.readFileSync(sourceTarget, "utf8");
     assert.ok(initialText.includes(manualDefault));
     fs.writeFileSync(sourceTarget, initialText.replace(manualDefault, manual));
+    const installedRetrieval = require(path.join(installed, "scripts/lib/skill-retrieval.js"));
+    const managedPacket = installedRetrieval.search(kb, { mode: "raw", query: "Markdown", paths: [captured.binding.primaryPath] });
+    assert.ok(managedPacket.evidence.length);
+    const managedPacketPath = path.join(temp, `${platform}-managed-packet.json`);
+    fs.writeFileSync(managedPacketPath, JSON.stringify(managedPacket));
+    const reportBody = path.join(temp, `${platform}-report.md`);
+    fs.writeFileSync(reportBody, "# 资料报告\n原文记录了离线资料的阅读方式。\n");
+    const reportTarget = `wiki/synthesis/${platform}-资料报告.md`;
+    const reportCandidate = review("stage", "--title", "资料报告", "--target", reportTarget, "--body", reportBody, "--packet", managedPacketPath);
+    review("adopt", "--id", reportCandidate.id);
+    const freshness = (root, command, ...args) => {
+      const result = spawnSync(process.execPath, [path.join(installed, "scripts/freshness-cli.js"), command, root, ...args, "--json"], {
+        cwd: temp, env, encoding: "utf8", timeout: 10_000,
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      return JSON.parse(result.stdout);
+    };
+    const pageStatus = (root) => freshness(root, "scan", "--path", reportTarget).pages.find((entry) => entry.path === reportTarget).status;
+    assert.equal(pageStatus(kb), "current");
     fs.writeFileSync(path.join(source, "images/a.png"), Buffer.from([8, 7, 6, 5]));
     assert.equal(markdown(kb, "scan", "--source-root", source).counts.modified, 1);
     const changed = markdown(kb, "capture", "--source-root", source, "--file", "笔记.md");
@@ -119,6 +139,25 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.equal(update.target, captured.target);
     assert.ok(fs.readFileSync(sourceTarget, "utf8").includes(manual));
     assert.deepEqual(fs.readFileSync(path.join(kb, captured.binding.primaryPath)), original);
+    assert.equal(pageStatus(kb), "stale", "attachment-only updates invalidate the report's old source revision");
+    assert.equal(installedRetrieval.verifyPacket(kb, managedPacket).ok, true, "old bytes remain verifiable independently of freshness");
+    const tracked = freshness(kb, "track", "--path", reportTarget);
+    const trackedAgain = freshness(kb, "track", "--path", reportTarget);
+    assert.equal(tracked.issues.length, 1);
+    assert.equal(trackedAgain.issues[0].issue.id, tracked.issues[0].issue.id);
+    const draftTarget = `wiki/synthesis/${platform}-未采用.md`;
+    const draftA = review("stage", "--title", "待核对", "--target", draftTarget, "--body", reportBody, "--packet", managedPacketPath);
+    fs.writeFileSync(reportBody, "# 修订草稿\n需要进一步核对资料。\n");
+    const draftB = review("stage", "--title", "待核对", "--target", draftTarget, "--body", reportBody, "--packet", managedPacketPath);
+    const beforeMaintenance = ["index.md", "log.md", reportTarget, captured.target].map((name) => fs.readFileSync(path.join(kb, name)));
+    assert.equal(review("supersede", "--id", draftA.id, "--replacement", draftB.id).status, "superseded");
+    assert.equal(review("cancel", "--id", draftB.id, "--reason", "暂不采用").status, "cancelled");
+    review("compact");
+    assert.equal(fs.existsSync(path.join(kb, draftTarget)), false);
+    assert.equal(review("show", "--id", draftA.id).status, "superseded");
+    assert.equal(review("show", "--id", draftB.id).status, "cancelled");
+    assert.ok(review("list", "--scope", "history", "--candidate-status", "cancelled").candidates.some((entry) => entry.id === draftB.id));
+    assert.deepEqual(["index.md", "log.md", reportTarget, captured.target].map((name) => fs.readFileSync(path.join(kb, name))), beforeMaintenance);
 
     const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"], { encoding: "utf8" }).status === 0);
     assert.ok(python, "Python 3.8+ is required for archive integration");
@@ -137,8 +176,9 @@ test("installed Skill Markdown updates, evidence, research and archive work with
     assert.equal(archive("restore", zipped, "--target", restored).cacheInvalidated, true);
     assert.deepEqual(fs.readFileSync(path.join(restored, "raw/notes/样本.md")), fs.readFileSync(path.join(kb, "raw/notes/样本.md")));
     assert.deepEqual(fs.readFileSync(path.join(restored, target)), fs.readFileSync(path.join(kb, target)));
-    const restoredState = JSON.parse(fs.readFileSync(path.join(restored, ".wiki-review/state.json"), "utf8"));
-    assert.equal(restoredState.issues.find((entry) => entry.id === issue.id).status, "resolved");
+    assert.equal(reviewAt(restored, "show", "--id", issue.id).status, "resolved");
+    assert.equal(reviewAt(restored, "show", "--id", draftA.id).status, "superseded");
+    assert.equal(pageStatus(restored), "stale");
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(restored, ".wiki-cache.json"), "utf8")), { version: 1, entries: {} });
     const relocated = path.join(temp, `${platform}-relocated-source`);
     copyFixture(source, relocated);

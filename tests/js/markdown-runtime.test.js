@@ -235,6 +235,38 @@ test("rehashing an altered journal write cannot certify committed or pending sou
   }
 });
 
+test("a damaged latest adoption never makes an older cold revision current", (t) => {
+  const f = fixture(t), first = f.publish();
+  write(f.source, "notes/a.md", read(f.source, "notes/a.md") + "\n更新的资料版本。\n");
+  const second = f.publish(f.capture(), "# 新摘要\n资料版本已更新。");
+  review.compact(f.kb);
+  const current = state.readAdoptions(f.kb);
+  assert.equal(current.complete, true);
+  assert.equal(current.sources.get(first.captured.sourceId).candidate.id, second.candidate.id);
+  write(f.kb, `.wiki-review/history/journals/${second.candidate.id}.json`, "{ damaged latest journal");
+  const broken = state.readAdoptions(f.kb);
+  assert.equal(broken.complete, false);
+  assert.equal(broken.sources.has(first.captured.sourceId), false);
+});
+
+test("source adoption and a shared record reader charge history, journal and summary to one budget", (t) => {
+  const f = fixture(t), first = f.publish();
+  review.compact(f.kb);
+  const history = require("../../scripts/lib/review-history");
+  let used = 0;
+  const readBinary = (relative, maximum) => {
+    const file = require("../../scripts/lib/markdown-package").readSafeBinary(f.kb, relative, maximum);
+    used += file.size; return file;
+  };
+  const records = history.readReviewRecords(f.kb, { readBinary });
+  const adoptions = state.readAdoptions(f.kb, { records, readBinary });
+  assert.equal(adoptions.complete, true);
+  assert.equal(adoptions.sources.get(first.captured.sourceId).candidate.id, first.candidate.id);
+  assert.equal(adoptions.metadataBytes, used);
+  assert.equal(records.readJournal(first.candidate.id).committed, true);
+  assert.equal(adoptions.metadataBytes, used, "a cached proof does not consume another IO budget");
+});
+
 test("registry, roots, concurrent locks and input-body errors fail safely", (t) => {
   const f = fixture(t);
   assert.throws(() => runtime.capture(f.kb, { sourceRoot: f.kb, file: "index.md" }), code("overlapping_roots"));
@@ -268,7 +300,9 @@ test("selected-source metadata reads fit one current journal without rereading a
   const second = f.publish(f.capture(), "第二版摘要。");
   write(f.source, "notes/b.md", "# Other source\n其他资料。\n");
   f.publish(f.capture({ file: "notes/b.md" }), "其他资料摘要。");
-  const budget = [".wiki-review/state.json", `.wiki-review/journals/${second.candidate.id}.json`, second.candidate.target]
+  const records = require("../../scripts/lib/review-history").readReviewRecords(f.kb);
+  const journal = records.index.entries.find((entry) => entry.id === second.candidate.id).journal.path;
+  const budget = records.metadataBytes + [journal, second.candidate.target]
     .reduce((sum, relative) => sum + fs.statSync(path.join(f.kb, relative)).size, 0);
   const selected = state.readAdoptions(f.kb, { sourceIds: [first.captured.sourceId], maxMetadataBytes: budget });
   assert.equal(selected.complete, true);
