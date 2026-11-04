@@ -1,6 +1,6 @@
 # Review 与研究回写
 
-用户要求记录知识问题、研究待确认内容、保存 query 或生成 digest 时读取本指南。正文由当前宿主生成；命令只负责本地校验、保存候选和发布，不配置模型或联网服务。
+用户要求记录知识问题、研究待确认内容、保存 query、生成 digest 或管理候选及历史时读取本指南。正文由当前宿主生成；命令只负责本地校验、保存候选和发布，不配置模型或联网服务。
 
 ## 问题与候选分开
 
@@ -48,4 +48,29 @@ node "${SKILL_DIR}/scripts/review-cli.js" recover "${WIKI_PATH}" --json
 
 若恰好在清理死进程锁时再次中断，可能留下 `.wiki-review/lock-recovery`。先停止所有 Review／归档命令，核对该文件的主机与 PID，证明同机进程已退出后才能移除这个保护文件，再运行 `recover`；无法确认时保留现场。
 
-`.wiki-review/` 保存问题、候选、旧目标和发布历史，跟随知识库归档，不依赖客户端。当前上限为 500 个问题、100 个候选，正文 256 KiB；达到容量限制会明确失败，不自动清理历史。Node 不可用时先展示研究草稿，说明自动校验／恢复不可用；保留用户手动保存的选择，不自动安装依赖。
+## 取消与替代候选
+
+用户要求放弃尚未采用的候选时，可取消；取消保留原始内容及原因，不改正式页面，也不解决关联问题。
+
+```bash
+node "${SKILL_DIR}/scripts/review-cli.js" cancel "${WIKI_PATH}" --id "${CANDIDATE_ID}" --reason "本次不再采用" --json
+node "${SKILL_DIR}/scripts/review-cli.js" supersede "${WIKI_PATH}" --id "${OLD_CANDIDATE_ID}" --replacement "${NEW_CANDIDATE_ID}" --json
+```
+
+替代需明确指定同一目标的两个待采用候选，不能用不同页面的候选替代；新候选仍需核对后采用。已采用记录不能取消或作为待采用候选替代。取消／被替代候选不可采用；需要继续研究时重新检索并生成新候选，不修改已保存历史的状态或哈希。
+
+## 历史与容量
+
+```bash
+node "${SKILL_DIR}/scripts/review-cli.js" list "${WIKI_PATH}" --scope all --candidate-status ready --limit 100 --offset 0 --json
+node "${SKILL_DIR}/scripts/review-cli.js" list "${WIKI_PATH}" --scope history --status all --limit 100 --offset 0 --json
+node "${SKILL_DIR}/scripts/review-cli.js" compact "${WIKI_PATH}" --json
+```
+
+活动候选与历史分开保存；新问题或候选被接受前会整理已完成记录，也可显式执行 `compact`。活动状态仍有 500 个问题、100 个候选的上限，正文 256 KiB；历史索引最多 10000 条，分页查看结果，超出预算时明确报告。累计已采用、取消或被替代的历史不会继续占满活动候选容量；仍被活动候选引用的问题要保留必要关联。
+
+整理先备份终态记录及已提交发布日志，再保存可核验历史索引、收缩活动状态，最后移除已备份且哈希一致的热日志。中断后停止并发编辑，重新运行 `compact`；一致的中间副本可继续整理，未知改动会阻止覆盖。存在未完成正式发布时先运行 `recover`，不要手动删除记录来腾容量。
+
+历史的 `show` 仍可查看原内容及当前证据核验结果；旧依据可能过期，按 [新鲜度指南](freshness.md) 单独判断。重复采用已采用的历史只返回既有结果，不重写页面。`.wiki-review/` 的活动与历史均随知识库归档；不依赖客户端。
+
+Node 不可用时先展示研究草稿，说明自动校验／恢复不可用；保留用户手动保存的选择，不自动安装依赖。

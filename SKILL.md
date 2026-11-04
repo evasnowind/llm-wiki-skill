@@ -9,7 +9,7 @@ description: |
   消化、查询、健康检查等操作。不要在用户只是要求"总结这篇文章"时触发——必须是明确的
   知识库相关意图。
 metadata:
-  version: "3.6.97"
+  version: "3.6.98"
   author: sdyckjq-lab
   hermes:
     tags:
@@ -133,6 +133,8 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 | "给我讲讲 XX"、"深度分析 XX"、"综述 XX"、"digest XX" | → **digest** |
 | "对比一下 X 和 Y"、"比较 X 和 Y"、"整理一下时间线"、"按时间排列" | → **digest**（指定格式） |
 | "检查知识库"、"健康检查"、"lint" | → **lint** |
+| "知识新鲜度"、"哪些知识过期"、"更新影响"、"哪些页面需要复核" | → **freshness**（工作流 14） |
+| "取消候选"、"替代候选"、"查看候选历史"、"整理 Review" | → [Review 候选管理](scripts/skill-workflows/review.md) |
 | "知识库状态"、"现在有什么"、"有多少素材" | → **status** |
 | "画个知识图谱"、"看看关联图"、"graph"、"知识库地图" | → **graph** |
 | "删除素材"、"remove"、"delete source"、"移除" | → **delete** |
@@ -1154,3 +1156,14 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 - 只为选中的变化保存固定素材版本、生成摘要候选；已有健康摘要且资料未变时直接复用。
 - 稳定 sourceId 决定摘要路径，改名和日期变化不重复建档；原文删除只提示，库内资料与历史保留。
 - 人工补充区原样保留，区外未知编辑拒绝覆盖；采用、恢复和归档沿用现有 Review 与 archive 指引。
+
+---
+
+## 工作流 14：freshness（知识新鲜度与更新影响）
+
+用户要求检查资料更新影响、知识依据版本或跟踪待复核页面时，执行通用前置检查，读 [新鲜度指南](scripts/skill-workflows/freshness.md)。
+
+- 默认只读检查，分别表达确定旧版引用、潜在关联、未知和未跟踪；`current` 只表示已记录依据仍是当前采用版本。
+- 新捕获但未采用的版本不替代当前依据；正文相同但附件变化形成的新修订，也需要复核旧版引用。
+- 用户要求跟踪后才为选定页面建立 Review 问题；正文更新继续通过候选核对与显式采用，不把检查完成说成知识已更新。
+- 检索字节核验与新鲜度分开表达，扫描不完整时说明范围；不以旧引用仍可核验推断旧结论仍适用。

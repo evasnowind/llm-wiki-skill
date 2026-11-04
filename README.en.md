@@ -10,7 +10,7 @@ Based on [Andrej Karpathy](https://karpathy.ai/)'s [llm-wiki methodology](https:
 
 Turn scattered information into a growing, interconnected knowledge base
 
-[![version](https://img.shields.io/badge/v3.6.97-Skill%20Markdown%20Fidelity%20and%20Updates-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.98-Skill%20Freshness%20and%20Candidate%20Lifecycle-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-multi--platform-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -81,8 +81,10 @@ The key difference: knowledge is **compiled once, maintained continuously** — 
 | 🔗 | **Structured Wiki** | Auto-generates entity pages, topic pages, source summaries with `[[bidirectional links]]` |
 | 📄 | **Faithful Markdown Capture** | Preserve original document and attachment bytes within an authorized directory; separate reading copies resolve local links, images and wiki links, while missing or ambiguous dependencies block adoption |
 | 🔁 | **Manual Incremental Updates** | Explicitly scan new, modified, renamed, deleted and repair-needed sources; keep stable source identities and summary paths, process selected changes, preserve personal notes and history, and only report deletions |
+| 🕒 | **Freshness and Update Impact** | Read-only checks distinguish superseded evidence from potential linked impact; queries report source freshness, and explicit tracking creates Review issues |
 | 🔎 | **Verifiable Retrieval** | The Skill searches keywords, declared aliases, sections, tags and unique links; raw-only mode searches original Markdown/text, with line ranges and content hashes that can be verified again |
 | ✍️ | **Review and Research Writeback** | Persistent issues and reviewable research candidates; explicit adoption checks sources and external edits, updates pages/index/log, and recovers interrupted publication without duplicate records |
+| 🗂️ | **Candidate Lifecycle** | Cancel or explicitly supersede pending candidates, browse paginated history and compact completed records; active capacity is separate from verifiable, portable history |
 | 🗃️ | **Archive and Restore** | Preserve sources, attachments, wiki and Review history; verify every file against a manifest and restore to a new or empty directory, invalidating caches without changing the global library pointer |
 | 🏷️ | **Confidence Annotation** | EXTRACTED / INFERRED / AMBIGUOUS / UNVERIFIED — see at a glance what needs verification |
 | 🔄 | **Smart Caching** | SHA256 deduplication + write-through cache + self-healing safety net |

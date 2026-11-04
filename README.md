@@ -10,7 +10,7 @@
 
 把碎片化的信息变成持续积累、互相链接的知识库
 
-[![version](https://img.shields.io/badge/v3.6.97-Skill%20Markdown保真与更新-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
+[![version](https://img.shields.io/badge/v3.6.98-Skill%20新鲜度与候选管理-E8D5B5?style=flat-square&labelColor=3a3026&color=E8D5B5)](https://github.com/sdyckjq-lab/llm-wiki-skill/releases)
 [![license](https://img.shields.io/badge/MIT-license-5a6e5c?style=flat-square&labelColor=3a3026)](LICENSE)
 [![platforms](https://img.shields.io/badge/Claude·Codex·OpenClaw·Hermes-多平台-7a96a6?style=flat-square&labelColor=3a3026)]
 
@@ -81,8 +81,10 @@ bash install.sh --platform hermes
 | 🔗 | **结构化 Wiki** | 自动生成实体页、主题页、素材摘要，用 `[[双向链接]]` 互相关联 |
 | 📄 | **Markdown 保真入库** | 按原始字节保存正文和授权目录内的附件；相对链接、图片及双链生成独立阅读副本，原文不改写，缺失或歧义依赖阻止采用 |
 | 🔁 | **手动增量更新** | 主动扫描新增、修改、改名、删除及待修复项；稳定资料身份与摘要路径，仅处理选中变化，保留人工补充和旧版，删除只提示 |
+| 🕒 | **知识新鲜度与影响检查** | 只读区分旧版依据和潜在关联影响，查询提示依据版本；显式跟踪受影响页面后进入 Review 复核 |
 | 🔎 | **可核验检索** | 纯 Skill 按关键词、同组别名、章节、标签和明确双链检索；可选择只查原始 Markdown／文本，证据包保留行号与内容哈希并支持重新核验 |
 | ✍️ | **Review／研究回写** | 持久跟踪知识问题，研究结果先保存为候选；核对后显式采用，检查来源与外部编辑，更新正式页面、索引日志，并支持中断恢复和重复采用去重 |
+| 🗂️ | **候选生命周期** | 支持取消、同目标替代、分页查看与安全整理；活动候选和历史分开计数，历史仍可追溯、核验与归档 |
 | 🗃️ | **归档与恢复** | 保存原文、附件、wiki 及 Review 历史；manifest 逐文件校验，恢复到新目录或空目录，缓存失效重建，不改变全局库指针 |
 | 🏷️ | **置信度标注** | EXTRACTED / INFERRED / AMBIGUOUS / UNVERIFIED，一眼看出哪些需要核实 |
 | 🔄 | **智能缓存** | SHA256 去重 + 写入即更新 + 自愈安全网，弱模型也不会漏缓存 |
