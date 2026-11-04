@@ -343,7 +343,48 @@ function search(kbRoot, options = {}) {
       break;
     }
   }
+  attachFreshness(root, packet, files, limits);
   return packet;
+}
+
+function attachFreshness(root, packet, files, limits) {
+  const paths = [...new Set(packet.evidence.map((item) => item.path))];
+  if (!paths.length) return;
+  const coverage = { complete: true, reasons: [] };
+  let pages = paths.map((relative) => ({ path: relative, status: "untracked" }));
+  if (fs.existsSync(path.join(root, ".wiki-review/state.json")) || fs.existsSync(path.join(root, ".wiki-review/history/index.json"))
+    || fs.existsSync(path.join(root, ".wiki-review/markdown-sources.json"))) {
+    const remaining = { maxFiles: limits.maxFiles - packet.coverage.filesScanned,
+      maxEntries: limits.maxEntries - packet.coverage.entriesScanned,
+      maxTotalBytes: limits.maxTotalBytes - packet.coverage.bytesRead,
+      maxMetadataBytes: limits.maxMetadataBytes - (packet.coverage.metadataBytes || 0) };
+    try {
+      if (Object.values(remaining).some((value) => value < 1)) throw Object.assign(new Error(), { code: "freshness_budget_exceeded" });
+      const { scanFreshness, DEFAULT_LIMITS: freshnessLimits } = require("./skill-freshness");
+      const report = scanFreshness(root, { paths, files: files.filter((item) => paths.includes(item.path)), limits: {
+        ...Object.fromEntries(Object.entries(remaining).map(([key, value]) => [key, Math.min(value, freshnessLimits[key])])),
+        maxFileBytes: Math.min(limits.maxFileBytes, freshnessLimits.maxFileBytes),
+        maxOutputChars: Math.max(4096, Math.min(limits.maxOutputChars, freshnessLimits.maxOutputChars)),
+      } });
+      Object.assign(coverage, report.coverage);
+      pages = report.pages.map((page) => ({ path: page.path, status: page.status,
+        reasons: [...new Set([page.reason, ...page.dependencies.map((item) => item.reason), ...page.impacts.map((item) => item.reason)].filter(Boolean))],
+        ...(page.currentRevision ? { currentRevision: page.currentRevision, usedRevision: page.usedRevision } : {}) }));
+      const included = new Set(pages.map((page) => page.path));
+      for (const relative of paths) if (!included.has(relative)) pages.push({ path: relative, status: "unknown", reasons: ["freshness_output_limit"] });
+    } catch (error) {
+      coverage.complete = false; coverage.reasons.push({ code: error.code || "freshness_unavailable" });
+      pages = paths.map((relative) => ({ path: relative, status: "unknown" }));
+    }
+  }
+  packet.freshness = { version: 1, scope: "adopted-kb", coverage, pages };
+  while (JSON.stringify(packet).length > limits.maxOutputChars && pages.length) {
+    pages.pop(); coverage.complete = false;
+    if (!coverage.reasons.some((item) => item.code === "freshness_output_limit")) coverage.reasons.push({ code: "freshness_output_limit" });
+  }
+  if (JSON.stringify(packet).length > limits.maxOutputChars) packet.freshness = {
+    version: 1, scope: "adopted-kb", coverage: { complete: false, reasons: [{ code: "freshness_output_limit" }] }, pages: []
+  };
 }
 
 function verifyPacket(kbRoot, packet) {
