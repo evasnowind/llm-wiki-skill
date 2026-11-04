@@ -14,6 +14,7 @@ const MAX_BODY = 256 * 1024;
 const MAX_ISSUES = 500;
 const MAX_CANDIDATES = 100;
 const MAX_PACKET_BYTES = 2 * 1024 * 1024;
+const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u;
 function fail(code) { const error = new Error(code); error.code = code; throw error; }
 function json(value) { return `${JSON.stringify(value, null, 2)}\n`; }
 function validateRelativePath(relative) {
@@ -86,7 +87,7 @@ function renderCandidate(candidate) {
 }
 
 function validateCandidate(candidate) {
-  if (!candidate || !CANDIDATE.test(candidate.id) || !["ready", "adopted"].includes(candidate.status)
+  if (!candidate || !CANDIDATE.test(candidate.id) || !["ready", "adopted", "cancelled", "superseded"].includes(candidate.status)
     || !validateSnapshot(candidate.targetBefore) || typeof candidate.body !== "string" || Buffer.byteLength(candidate.body) > MAX_BODY
     || sha256(candidate.body) !== candidate.bodySha256 || typeof candidate.content !== "string"
     || Buffer.byteLength(candidate.content) > MAX_BODY * 2 || sha256(candidate.content) !== candidate.contentSha256
@@ -96,6 +97,16 @@ function validateCandidate(candidate) {
     || (candidate.issueId !== null && !ISSUE.test(candidate.issueId))) fail("invalid_state");
   targetPath(candidate.target);
   text(candidate.title, 240, "invalid_state");
+  if (candidate.status === "cancelled") {
+    if (!TIME.test(candidate.cancelledAt) || candidate.supersededAt !== undefined || candidate.supersededBy !== undefined
+      || candidate.adoptedAt !== undefined) fail("invalid_state");
+    if (candidate.cancelReason !== undefined) text(candidate.cancelReason, 4000, "invalid_state");
+  } else if (candidate.status === "superseded") {
+    if (!TIME.test(candidate.supersededAt) || !CANDIDATE.test(candidate.supersededBy)
+      || candidate.supersededBy === candidate.id || candidate.cancelledAt !== undefined
+      || candidate.cancelReason !== undefined || candidate.adoptedAt !== undefined) fail("invalid_state");
+  } else if (candidate.cancelledAt !== undefined || candidate.cancelReason !== undefined
+    || candidate.supersededAt !== undefined || candidate.supersededBy !== undefined) fail("invalid_state");
   if (candidate.markdownSource !== undefined) {
     validateBinding(candidate.markdownSource);
     if (candidate.target !== `wiki/sources/${candidate.markdownSource.sourceId}.md`
@@ -106,17 +117,23 @@ function validateCandidate(candidate) {
   if (candidate.id !== candidateIdentity(candidate) || renderCandidate(candidate) !== candidate.content) fail("invalid_state");
 }
 
+function validateIssue(issue) {
+  if (!issue || !ISSUE.test(issue.id) || !TYPES.has(issue.type) || !["open", "dismissed", "resolved"].includes(issue.status)
+    || !Array.isArray(issue.paths) || !Array.isArray(issue.evidence) || issue.paths.length > 50 || issue.evidence.length > 50
+    || issue.id !== issueIdentity(issue)) fail("invalid_state");
+  text(issue.title, 240, "invalid_state"); text(issue.reason, 4000, "invalid_state");
+  for (const item of issue.paths) { validateRelativePath(item.path); if (item.sha256 !== null && !HASH.test(item.sha256)) fail("invalid_state"); }
+  for (const item of issue.evidence) { validateRelativePath(item.path); if (!HASH.test(item.fileSha256)) fail("invalid_state"); }
+  return issue;
+}
+
 function validateState(state) {
   if (!state || state.version !== 1 || !Array.isArray(state.issues) || !Array.isArray(state.candidates)
     || state.issues.length > MAX_ISSUES || state.candidates.length > MAX_CANDIDATES) fail("invalid_state");
   const ids = new Set();
   for (const issue of state.issues) {
-    if (!issue || !ISSUE.test(issue.id) || !TYPES.has(issue.type) || !["open", "dismissed", "resolved"].includes(issue.status)
-      || !Array.isArray(issue.paths) || !Array.isArray(issue.evidence) || issue.paths.length > 50 || issue.evidence.length > 50
-      || issue.id !== issueIdentity(issue) || ids.has(issue.id)) fail("invalid_state");
-    text(issue.title, 240, "invalid_state"); text(issue.reason, 4000, "invalid_state");
-    for (const item of issue.paths) { validateRelativePath(item.path); if (item.sha256 !== null && !HASH.test(item.sha256)) fail("invalid_state"); }
-    for (const item of issue.evidence) { validateRelativePath(item.path); if (!HASH.test(item.fileSha256)) fail("invalid_state"); }
+    validateIssue(issue);
+    if (ids.has(issue.id)) fail("invalid_state");
     ids.add(issue.id);
   }
   for (const candidate of state.candidates) {
@@ -144,11 +161,11 @@ function indexEntry(candidate, format = "wikilink-v1") {
   return `${marker}\n- [[${candidate.target}|${label}]] — research / 研究 ${adopted}`;
 }
 
-function updatedIndex(before, state, candidate, format = "wikilink-v1") {
+function updatedIndex(before, state, candidate, format = "wikilink-v1", previousCandidate) {
   const content = before?.content || "";
   const marker = `<!-- review-target:${sha256(candidate.target).slice(0, 24)} -->`;
   if (!content.includes(marker)) return appendRecord(before, indexEntry(candidate, format));
-  const previous = [...state.candidates].reverse().find((item) => item.status === "adopted" && item.target === candidate.target);
+  const previous = [...state.candidates].reverse().find((item) => item.status === "adopted" && item.target === candidate.target) || previousCandidate;
   if (!previous) fail("index_managed_entry_changed");
   // Existing managed Markdown pairs are migrated only if the full pair is
   // unchanged. User-authored index text remains outside this replacement.
@@ -166,7 +183,13 @@ function validateJournal(journal) {
     || typeof journal.createdAt !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(journal.createdAt)
     || !Array.isArray(journal.writes) || journal.writes.length !== 4) fail("invalid_journal");
   validateCandidate(journal.candidate);
-  if (journal.candidate.id !== journal.candidateId || journal.target !== journal.candidate.target) fail("invalid_journal");
+  if (journal.candidate.id !== journal.candidateId || journal.target !== journal.candidate.target
+    || journal.candidate.status !== "ready") fail("invalid_journal");
+  if (journal.previousCandidate !== undefined) {
+    validateCandidate(journal.previousCandidate);
+    if (journal.previousCandidate.status !== "adopted" || journal.previousCandidate.target !== journal.target
+      || journal.previousCandidate.id === journal.candidateId || !TIME.test(journal.previousCandidate.adoptedAt)) fail("invalid_journal");
+  }
   const expected = [journal.target, "index.md", "log.md", STATE];
   for (const [index, write] of journal.writes.entries()) {
     if (!write || write.path !== expected[index] || typeof write.content !== "string"
@@ -187,7 +210,7 @@ function validateJournal(journal) {
   try { expectedState = validateState(JSON.parse(journal.writes[3].beforeContent)); } catch { fail("invalid_journal"); }
   // The absent field identifies already-persisted v1 Markdown journals. Their
   // fixed write-set must remain replayable; new publications use wikilinks.
-  if (journal.writes[1].content !== updatedIndex(before(1), expectedState, journal.candidate, journal.indexFormat || "markdown-v1")
+  if (journal.writes[1].content !== updatedIndex(before(1), expectedState, journal.candidate, journal.indexFormat || "markdown-v1", journal.previousCandidate)
     || journal.writes[2].content !== appendRecord(before(2), `${marker}\n## ${journal.createdAt.slice(0, 10)} research | ${label}\n\nAdopted ${journal.candidateId}: ${journal.target}`)) fail("invalid_journal");
   const expectedCandidate = expectedState.candidates.find((item) => item.id === journal.candidateId);
   if (!expectedCandidate || JSON.stringify(expectedCandidate) !== JSON.stringify(journal.candidate)) fail("invalid_journal");
@@ -203,4 +226,4 @@ function validateJournal(journal) {
 
 module.exports = { STATE, JOURNALS, TYPES, HASH, ISSUE, CANDIDATE, MAX_BODY, MAX_ISSUES, MAX_CANDIDATES,
   validateRelativePath, text, targetPath, issueIdentity, candidateIdentity, renderCandidate,
-  validateCandidate, validateState, appendRecord, indexEntry, updatedIndex, validateJournal };
+  validateCandidate, validateIssue, validateState, appendRecord, indexEntry, updatedIndex, validateJournal };

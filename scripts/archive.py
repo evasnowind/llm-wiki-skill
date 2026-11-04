@@ -6,6 +6,7 @@ import decimal
 import hashlib
 import json
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -20,6 +21,7 @@ import uuid
 import zipfile
 import zlib
 from pathlib import Path
+from urllib.parse import quote
 
 MANIFEST = "archive-manifest.json"
 FORMAT = "llm-wiki-skill"
@@ -36,6 +38,11 @@ MAX_ENTRIES = 50000
 MAX_MANIFEST = 16 * 1024 * 1024
 MAX_STATE = 16 * 1024 * 1024
 MAX_JOURNAL = 128 * 1024 * 1024
+HISTORY = ".wiki-review/history"
+HISTORY_INDEX = HISTORY + "/index.json"
+MAX_HISTORY_INDEX = 4 * 1024 * 1024
+MAX_HISTORY_RECORD = 4 * 1024 * 1024
+MAX_HISTORY_ENTRIES = 10000
 HASH = re.compile(r"^[a-f0-9]{64}$")
 KB_ID = re.compile(r"^kb-[a-f0-9]{32}$")
 CANDIDATE = re.compile(r"^candidate-[a-f0-9]{24}$")
@@ -45,6 +52,7 @@ MARKDOWN_REVISION = re.compile(r"^rev-[a-f0-9]{64}$")
 MARKDOWN_COLLECTION = re.compile(r"^mdcol-[a-f0-9]{24}$")
 MARKDOWN_REGISTRY = ".wiki-review/markdown-sources.json"
 ISO_TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+JS_WHITESPACE = "\t\n\v\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF"
 RESERVED = re.compile(r"^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)", re.I)
 
 
@@ -73,7 +81,7 @@ def encoded(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
-def identity_hash(value):
+def compact_json(value):
     # Node-produced store JSON preserves property order, but Python and JS use
     # different exponent/fixed notation thresholds for JSON numbers.
     def compact(item):
@@ -104,7 +112,22 @@ def identity_hash(value):
         if isinstance(item, dict):
             return "{" + ",".join(json.dumps(key, ensure_ascii=False) + ":" + compact(child) for key, child in item.items()) + "}"
         fail("invalid_review_state")
-    return digest(compact(value).encode("utf-8"))[:24]
+    return compact(value)
+
+
+def identity_hash(value):
+    return digest(compact_json(value).encode("utf-8"))[:24]
+
+
+def review_json(value, depth=0):
+    """The publisher's JSON.stringify(value, null, 2) + newline format."""
+    pad = "  " * depth
+    if isinstance(value, dict) and value:
+        return "{\n" + ",\n".join(pad + "  " + compact_json(key) + ": " + review_json(item, depth + 1)
+                                    for key, item in value.items()) + "\n" + pad + "}"
+    if isinstance(value, list) and value:
+        return "[\n" + ",\n".join(pad + "  " + review_json(item, depth + 1) for item in value) + "\n" + pad + "]"
+    return compact_json(value)
 
 
 def parse_json(data, code="invalid_metadata"):
@@ -408,8 +431,55 @@ def markdown_registry(value):
     return bindings
 
 
+def render_review_candidate(candidate):
+    """The deterministic published Markdown format, shared with Review v1."""
+    packet = candidate["packet"]
+    binding = candidate.get("markdownSource")
+    kind = "source" if binding else "query" if candidate["target"].startswith("wiki/queries/") else "research"
+    sources = sorted({item["path"] for item in packet["evidence"]}, key=lambda item: item.encode("utf-16-be"))
+    lines = ["---", "type: " + kind, "derived: true", "title: " + compact_json(candidate["title"]),
+             "created: " + compact_json(candidate["createdAt"]), "review-candidate: " + candidate["id"], "sources:"]
+    lines.extend("  - " + compact_json(source) for source in sources)
+    if binding:
+        reading = binding.get("readingPath") or binding["primaryPath"].replace("/files/", "/reading/", 1)
+        lines.extend(["source_id: local_document", 'source_type: "Markdown/文本/HTML"',
+                      "source_path: " + compact_json(binding["primaryPath"]), "markdown-source-id: " + binding["sourceId"],
+                      "markdown-revision: " + binding["revision"], "reading_path: " + compact_json(reading)])
+    lines.extend(["---", "", candidate["body"], "", "## Evidence / 证据", ""])
+    if isinstance(packet.get("coverage"), dict) and packet["coverage"].get("complete") is False:
+        lines.extend(["> Coverage is incomplete / 本次检索覆盖不完整；结论限于列出的证据。", ""])
+    for evidence in packet["evidence"]:
+        relative = posixpath.relpath(evidence["path"], posixpath.dirname(candidate["target"]))
+        link = "/".join(quote(part, safe="-_.!~*'()") for part in relative.split("/"))
+        lines.append("- [" + evidence["id"] + "](" + link + ") — " + evidence["path"] + ":" + str(evidence["startLine"]) + "-" + str(evidence["endLine"]) + "; SHA256 " + evidence["fileSha256"])
+        excerpt = [re.sub(r"\r$", "", line) for line in evidence["excerpt"].split("\n")]
+        if binding:
+            fence = "`" * max([3] + [len(match) + 1 for match in re.findall(r"`+", evidence["excerpt"])])
+            lines.extend(["", "  " + fence + "text"] + ["  " + line for line in excerpt] + ["  " + fence, ""])
+        else:
+            lines.extend(["  > " + line for line in excerpt] + [""])
+    # ECMAScript trimEnd differs from Python's default rstrip for FEFF and a
+    # few Unicode whitespace characters; preserve the publisher's exact bytes.
+    return "\n".join(lines).rstrip(JS_WHITESPACE) + "\n"
+
+
 def review_candidate(value):
-    if not isinstance(value, dict) or not CANDIDATE.fullmatch(str(value.get("id", ""))) or value.get("status") not in ("ready", "adopted"):
+    if not isinstance(value, dict) or not CANDIDATE.fullmatch(str(value.get("id", ""))) or value.get("status") not in ("ready", "adopted", "cancelled", "superseded"):
+        fail("invalid_review_state")
+    status = value["status"]
+    if status == "cancelled":
+        if not ISO_TIME.fullmatch(str(value.get("cancelledAt", ""))) or any(field in value for field in ("adoptedAt", "supersededAt", "supersededBy")):
+            fail("invalid_review_state")
+        if "cancelReason" in value:
+            reason = value["cancelReason"]
+            if not isinstance(reason, str) or not reason.strip(JS_WHITESPACE) \
+                    or len(reason.encode("utf-16-le", "surrogatepass")) // 2 > 4000 \
+                    or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", reason):
+                fail("invalid_review_state")
+    elif status == "superseded":
+        if not ISO_TIME.fullmatch(str(value.get("supersededAt", ""))) or not CANDIDATE.fullmatch(str(value.get("supersededBy", ""))) or value["supersededBy"] == value["id"] or any(field in value for field in ("adoptedAt", "cancelledAt", "cancelReason")):
+            fail("invalid_review_state")
+    elif any(field in value for field in ("cancelledAt", "cancelReason", "supersededAt", "supersededBy")):
         fail("invalid_review_state")
     target = relative_path(value.get("target"))
     if not target.startswith("wiki/") or not target.endswith(".md") or any(part.startswith(".") for part in target.split("/")):
@@ -450,6 +520,28 @@ def review_candidate(value):
         identity["markdownSource"] = binding
     if value["id"] != "candidate-" + identity_hash(identity):
         fail("invalid_review_state")
+    if value["content"] != render_review_candidate(value):
+        fail("invalid_review_state")
+
+
+def review_issue(issue):
+    if not isinstance(issue, dict) or not ISSUE.fullmatch(str(issue.get("id", ""))) or issue.get("status") not in ("open", "dismissed", "resolved"):
+        fail("invalid_review_state")
+    if issue.get("type") not in ("contradiction", "duplicate", "missing", "unverified", "suggestion") or not isinstance(issue.get("title"), str) or not 1 <= len(issue["title"]) <= 240 or not isinstance(issue.get("reason"), str) or not 1 <= len(issue["reason"]) <= 4000:
+        fail("invalid_review_state")
+    for field, hash_field in (("paths", "sha256"), ("evidence", "fileSha256")):
+        if not isinstance(issue.get(field), list) or len(issue[field]) > 50:
+            fail("invalid_review_state")
+        for item in issue[field]:
+            if not isinstance(item, dict):
+                fail("invalid_review_state")
+            relative_path(item.get("path"))
+            if (hash_field == "fileSha256" or item.get(hash_field) is not None) and not HASH.fullmatch(str(item.get(hash_field, ""))):
+                fail("invalid_review_state")
+    identity = {"type": issue["type"], "title": issue["title"], "reason": issue["reason"],
+                "paths": issue["paths"], "evidence": issue["evidence"]}
+    if issue["id"] != "issue-" + identity_hash(identity):
+        fail("invalid_review_state")
 
 
 def review_state(data):
@@ -460,22 +552,8 @@ def review_state(data):
         fail("invalid_review_state")
     ids = set()
     for issue in value["issues"]:
-        if not isinstance(issue, dict) or not ISSUE.fullmatch(str(issue.get("id", ""))) or issue["id"] in ids or issue.get("status") not in ("open", "dismissed", "resolved"):
-            fail("invalid_review_state")
-        if issue.get("type") not in ("contradiction", "duplicate", "missing", "unverified", "suggestion") or not isinstance(issue.get("title"), str) or not 1 <= len(issue["title"]) <= 240 or not isinstance(issue.get("reason"), str) or not 1 <= len(issue["reason"]) <= 4000:
-            fail("invalid_review_state")
-        for field, hash_field in (("paths", "sha256"), ("evidence", "fileSha256")):
-            if not isinstance(issue.get(field), list) or len(issue[field]) > 50:
-                fail("invalid_review_state")
-            for item in issue[field]:
-                if not isinstance(item, dict):
-                    fail("invalid_review_state")
-                relative_path(item.get("path"))
-                if item.get(hash_field) is not None and not HASH.fullmatch(str(item[hash_field])):
-                    fail("invalid_review_state")
-        identity = {"type": issue["type"], "title": issue["title"], "reason": issue["reason"],
-                    "paths": issue["paths"], "evidence": issue["evidence"]}
-        if issue["id"] != "issue-" + identity_hash(identity):
+        review_issue(issue)
+        if issue["id"] in ids:
             fail("invalid_review_state")
         ids.add(issue["id"])
     for candidate in value["candidates"]:
@@ -486,10 +564,132 @@ def review_state(data):
     return value
 
 
+def record_view(value):
+    # Bodies have already been validated. Keep only association fields and a
+    # hash of the complete parsed record, rather than 10,000 candidate bodies.
+    fields = ("id", "status", "target", "title", "contentSha256", "issueId", "adoptedAt", "supersededBy",
+              "resolvedBy", "resolvedAt", "markdownSource")
+    result = {key: value[key] for key in fields if key in value}
+    result["fingerprint"] = digest(compact_json(value).encode("utf-8"))
+    if value.get("status") == "adopted":
+        original = dict(value)
+        original.pop("adoptedAt", None)
+        original["status"] = "ready"
+        result["readyFingerprint"] = digest(compact_json(original).encode("utf-8"))
+    return result
+
+
+def read_review_graph(root, files, limits):
+    file_set, used = set(files), 0
+
+    def metadata(relative, maximum, code="invalid_review_history", descriptor=None):
+        nonlocal used
+        try:
+            size = checked(root, relative).stat().st_size
+            if size > maximum or used + size > limits["max_total_bytes"]:
+                fail("metadata_budget_exceeded")
+            used += size
+            data = read_file(root, relative, maximum)
+        except OSError:
+            fail(code)
+        if descriptor is not None and (len(data) != descriptor["size"] or digest(data) != descriptor["sha256"]):
+            fail("history_conflict")
+        return data
+
+    state = review_state(metadata(STATE, MAX_STATE, "invalid_review_state")) if STATE in file_set else None
+    index = parse_json(metadata(HISTORY_INDEX, MAX_HISTORY_INDEX), "invalid_review_history") if HISTORY_INDEX in file_set else {"version": 1, "entries": []}
+    if not version_one(index) or not isinstance(index.get("entries"), list) or len(index["entries"]) > MAX_HISTORY_ENTRIES:
+        fail("invalid_review_history")
+    candidates, issues, descriptors, declared = {}, {}, {}, {HISTORY_INDEX} if HISTORY_INDEX in file_set else set()
+    for entry in index["entries"]:
+        if not isinstance(entry, dict) or entry.get("kind") not in ("candidate", "issue"):
+            fail("invalid_review_history")
+        kind, record_id = entry["kind"], entry.get("id", "")
+        if not (CANDIDATE if kind == "candidate" else ISSUE).fullmatch(str(record_id)) or record_id in descriptors:
+            fail("invalid_review_history")
+        expected = HISTORY + ("/candidates/" if kind == "candidate" else "/issues/") + record_id + ".json"
+        if entry.get("path") != expected or type(entry.get("size")) is not int or not 1 <= entry["size"] <= MAX_HISTORY_RECORD or not HASH.fullmatch(str(entry.get("sha256", ""))):
+            fail("invalid_review_history")
+        value = parse_json(metadata(expected, MAX_HISTORY_RECORD, descriptor=entry), "invalid_review_history")
+        (review_candidate if kind == "candidate" else review_issue)(value)
+        if value["id"] != record_id or value["status"] in ("ready", "open"):
+            fail("invalid_review_history")
+        if (kind == "candidate" and value["status"] == "adopted") != ("journal" in entry):
+            fail("invalid_review_history")
+        if "journal" in entry:
+            journal = entry["journal"]
+            if not isinstance(journal, dict) or journal.get("path") != HISTORY + "/journals/" + record_id + ".json" or type(journal.get("size")) is not int or not 1 <= journal["size"] <= MAX_JOURNAL or not HASH.fullmatch(str(journal.get("sha256", ""))):
+                fail("invalid_review_history")
+            declared.add(journal["path"])
+        declared.add(expected)
+        descriptors[record_id] = entry
+        (candidates if kind == "candidate" else issues)[record_id] = record_view(value)
+    # Copies made before an interrupted index publication are preserved for a
+    # compact retry, but cannot be certified as indexed history yet.
+    if {relative for relative in files if relative.startswith(HISTORY + "/")} != declared:
+        fail("invalid_review_history")
+    for values, active in ((issues, (state or {}).get("issues", [])), (candidates, (state or {}).get("candidates", []))):
+        for value in active:
+            view = record_view(value)
+            if value["id"] in values and values[value["id"]]["fingerprint"] != view["fingerprint"]:
+                fail("history_conflict")
+            values[value["id"]] = view
+    for candidate in candidates.values():
+        if candidate.get("issueId") and candidate["issueId"] not in issues:
+            fail("invalid_review_history")
+        if candidate["status"] == "superseded":
+            replacement = candidates.get(candidate["supersededBy"])
+            if not replacement or replacement["target"] != candidate["target"]:
+                fail("invalid_review_history")
+    finished = set()
+    for candidate in candidates.values():
+        seen, cursor = set(), candidate
+        while cursor and cursor["id"] not in finished:
+            if cursor["id"] in seen:
+                fail("invalid_review_history")
+            seen.add(cursor["id"])
+            cursor = candidates.get(cursor["supersededBy"]) if cursor["status"] == "superseded" else None
+        finished.update(seen)
+    return state, candidates, issues, descriptors, metadata
+
+
+def index_entry(candidate, style):
+    marker = "<!-- review-target:" + digest(candidate["target"].encode("utf-8"))[:24] + " -->"
+    adopted = "<!-- review-adopt:" + candidate["id"] + " -->"
+    if style == "markdown-v1":
+        label = re.sub(r"[\[\]\r\n]", " ", candidate["title"])
+        link = "/".join(quote(part, safe="-_.!~*'()") for part in candidate["target"].split("/"))
+        return marker + "\n- [" + label + "](" + link + ") — research / 研究 " + adopted
+    label = re.sub(r"[\\\[\]|`\r\n]", " ", candidate["title"])
+    return marker + "\n- [[" + candidate["target"] + "|" + label + "]] — research / 研究 " + adopted
+
+
+def append_record(before, entry):
+    content = before or ""
+    return content + ("\n" if content and not content.endswith("\n") else "") + "\n" + entry + "\n"
+
+
+def journal_index(before, state, candidate, style, previous):
+    content = before or ""
+    marker = "<!-- review-target:" + digest(candidate["target"].encode("utf-8"))[:24] + " -->"
+    if marker not in content:
+        return append_record(before, index_entry(candidate, style))
+    previous = next((item for item in reversed(state["candidates"]) if item["status"] == "adopted" and item["target"] == candidate["target"]), previous)
+    if not previous:
+        fail("invalid_review_journal")
+    old = next((value for value in (index_entry(previous, "wikilink-v1"), index_entry(previous, "markdown-v1")) if value in content), None)
+    if old is None or content.count(marker) != 1:
+        fail("invalid_review_journal")
+    offset = content.index(old)
+    if (offset and content[offset - 1] != "\n") or (offset + len(old) < len(content) and content[offset + len(old)] != "\n"):
+        fail("invalid_review_journal")
+    return content[:offset] + index_entry(candidate, style) + content[offset + len(old):]
+
+
 def validate_review(root, files, limits=DEFAULTS):
-    state = review_state(read_file(root, STATE, MAX_STATE)) if STATE in files else None
-    bindings = markdown_registry(parse_json(read_file(root, MARKDOWN_REGISTRY, MAX_STATE))) if MARKDOWN_REGISTRY in files else []
-    bindings += [candidate["markdownSource"] for candidate in (state or {}).get("candidates", []) if "markdownSource" in candidate]
+    state, candidates, issues, descriptors, metadata = read_review_graph(root, files, limits)
+    bindings = markdown_registry(parse_json(metadata(MARKDOWN_REGISTRY, MAX_STATE))) if MARKDOWN_REGISTRY in files else []
+    bindings += [candidate["markdownSource"] for candidate in candidates.values() if "markdownSource" in candidate]
     checked_manifests = set()
     checked_contents = {}
     package_bytes = 0
@@ -501,7 +701,7 @@ def validate_review(root, files, limits=DEFAULTS):
         checked_manifests.add(key)
         if binding["manifestPath"] not in file_set or binding["primaryPath"] not in file_set:
             fail("incomplete_markdown_package")
-        data = read_file(root, binding["manifestPath"], 4 * 1024 * 1024)
+        data = metadata(binding["manifestPath"], 4 * 1024 * 1024, "invalid_markdown_manifest")
         if digest(data) != binding["manifestSha256"]:
             fail("invalid_markdown_manifest")
         manifest = parse_json(data, "invalid_markdown_manifest")
@@ -549,15 +749,31 @@ def validate_review(root, files, limits=DEFAULTS):
         actual = {name[len(base) + 1:] for name in file_set if name.startswith(base + "/")}
         if not primary_found or originals != readings or declared != actual:
             fail("incomplete_markdown_package")
-    committed = {}
+    journal_sources = {}
     for relative in files:
         if not relative.startswith(".wiki-review/journals/"):
             continue
-        value = parse_json(read_file(root, relative, MAX_JOURNAL), "invalid_review_journal")
+        candidate_id = relative[len(".wiki-review/journals/"):-5] if relative.endswith(".json") else ""
+        if not CANDIDATE.fullmatch(candidate_id) or relative != ".wiki-review/journals/" + candidate_id + ".json":
+            fail("invalid_review_journal")
+        journal_sources.setdefault(candidate_id, []).append((relative, None))
+    for record_id, entry in descriptors.items():
+        if "journal" in entry:
+            journal_sources.setdefault(record_id, []).append((entry["journal"]["path"], entry["journal"]))
+    committed = set()
+    for candidate_id, sources in journal_sources.items():
+        value, fingerprint = None, None
+        for relative, descriptor in sources:
+            data = metadata(relative, MAX_JOURNAL, "invalid_review_journal", descriptor)
+            sha = digest(data)
+            if fingerprint is not None and sha != fingerprint:
+                fail("history_conflict")
+            if value is None:
+                value = parse_json(data, "invalid_review_journal")
+                fingerprint = sha
         if not version_one(value) or value.get("committed") is not True:
             fail("incomplete_publication")
-        candidate_id = value.get("candidateId", "")
-        if not CANDIDATE.fullmatch(str(candidate_id)) or relative != ".wiki-review/journals/" + candidate_id + ".json":
+        if value.get("candidateId") != candidate_id or value.get("indexFormat") not in (None, "wikilink-v1") or not ISO_TIME.fullmatch(str(value.get("createdAt", ""))):
             fail("invalid_review_journal")
         writes = value.get("writes")
         target = relative_path(value.get("target"))
@@ -577,32 +793,51 @@ def validate_review(root, files, limits=DEFAULTS):
             fail("invalid_review_journal")
         before_state = review_state(writes[3]["beforeContent"].encode("utf-8"))
         after_state = review_state(writes[3]["content"].encode("utf-8"))
-        if candidate not in before_state["candidates"] or not state:
+        if not any(compact_json(item) == compact_json(candidate) for item in before_state["candidates"]):
             fail("invalid_review_journal")
         after = next((item for item in after_state["candidates"] if item["id"] == candidate_id), None)
         if not after or after["status"] != "adopted" or after["contentSha256"] != candidate["contentSha256"]:
             fail("invalid_review_journal")
         if candidate.get("issueId") and not any(item["id"] == candidate["issueId"] and item["status"] == "resolved" and item.get("resolvedBy") == candidate_id for item in after_state["issues"]):
             fail("invalid_review_journal")
-        current = next((item for item in state["candidates"] if item["id"] == candidate_id), None)
+        previous = value.get("previousCandidate")
+        if previous is not None:
+            review_candidate(previous)
+            current_previous = candidates.get(previous["id"])
+            if previous["status"] != "adopted" or previous["target"] != target or previous["id"] == candidate_id or not ISO_TIME.fullmatch(str(previous.get("adoptedAt", ""))) or not current_previous or current_previous["fingerprint"] != record_view(previous)["fingerprint"]:
+                fail("invalid_review_journal")
+        expected_index = journal_index(writes[1]["beforeContent"], before_state, candidate, value.get("indexFormat") or "markdown-v1", previous)
+        label = re.sub(r"[\[\]\r\n]", " ", candidate["title"])
+        expected_log = append_record(writes[2]["beforeContent"], "<!-- review-adopt:" + candidate_id + " -->\n## " + value["createdAt"][:10] + " research | " + label + "\n\nAdopted " + candidate_id + ": " + target)
+        if writes[1]["content"] != expected_index or writes[2]["content"] != expected_log:
+            fail("invalid_review_journal")
+        expected_candidate = next(item for item in before_state["candidates"] if item["id"] == candidate_id)
+        expected_candidate["status"] = "adopted"
+        expected_candidate["adoptedAt"] = value["createdAt"]
+        if candidate.get("issueId"):
+            issue = next((item for item in before_state["issues"] if item["id"] == candidate["issueId"]), None)
+            if not issue or issue["status"] != "open":
+                fail("invalid_review_journal")
+            issue["status"] = "resolved"
+            issue["resolvedBy"] = candidate_id
+            issue["resolvedAt"] = value["createdAt"]
+        if writes[3]["content"] != review_json(before_state) + "\n":
+            fail("invalid_review_journal")
+        current = candidates.get(candidate_id)
         if not current or current["status"] != "adopted" or current.get("adoptedAt") != value.get("createdAt"):
             fail("invalid_review_journal")
-        original = dict(current)
-        original.pop("adoptedAt", None)
-        original["status"] = "ready"
-        if original != candidate:
+        if current["readyFingerprint"] != record_view(candidate)["fingerprint"]:
             fail("invalid_review_journal")
-        committed[candidate_id] = value
-    if state:
-        for candidate in state["candidates"]:
-            if candidate["status"] == "adopted" and candidate["id"] not in committed:
-                fail("invalid_review_journal")
-        for issue in state["issues"]:
-            if issue["status"] != "resolved":
-                continue
-            candidate = next((item for item in state["candidates"] if item["id"] == issue.get("resolvedBy")), None)
-            if not candidate or candidate["status"] != "adopted" or candidate.get("issueId") != issue["id"] or issue.get("resolvedAt") != candidate.get("adoptedAt"):
-                fail("invalid_review_state")
+        committed.add(candidate_id)
+    for candidate in candidates.values():
+        if candidate["status"] == "adopted" and candidate["id"] not in committed:
+            fail("invalid_review_journal")
+    for issue in issues.values():
+        if issue["status"] != "resolved":
+            continue
+        candidate = candidates.get(issue.get("resolvedBy"))
+        if not candidate or candidate["status"] != "adopted" or candidate.get("issueId") != issue["id"] or issue.get("resolvedAt") != candidate.get("adoptedAt"):
+            fail("invalid_review_state")
 
 
 def stream_hash(stream, maximum, destination=None):

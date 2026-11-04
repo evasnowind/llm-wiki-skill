@@ -8,13 +8,12 @@ const path = require("node:path");
 const {
   validateBinding, validateRelativePath, readSafeBinary, checkedPath,
 } = require("./markdown-package");
-const { validateCandidate, validateState, validateJournal, candidateIdentity } = require("./review-records");
+const { validateCandidate, validateJournal, candidateIdentity } = require("./review-records");
 
 const REGISTRY = ".wiki-review/markdown-sources.json";
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_WRITER_METADATA_BYTES = 160 * 1024 * 1024;
-const MAX_JOURNAL_BYTES = 128 * 1024 * 1024;
 const SOURCE_ID = /^md-[a-f0-9]{24}$/u;
 const COLLECTION_ID = /^mdcol-[a-f0-9]{24}$/u;
 const HASH = /^[a-f0-9]{64}$/u;
@@ -155,13 +154,20 @@ function assessSummary(root, candidate, { readBinary = (relative, maximum) => re
   }
 }
 
-function readAdoptions(root, { maxMetadataBytes = MAX_METADATA_BYTES, sourceIds } = {}) {
+function readAdoptions(root, { maxMetadataBytes = MAX_METADATA_BYTES, sourceIds, records, readBinary } = {}) {
   const result = { sources: new Map(), candidates: [], pendingIds: new Set(), committedIds: new Set(), complete: true, warnings: [], metadataBytes: 0 };
   if (!Number.isSafeInteger(maxMetadataBytes) || maxMetadataBytes < 1 || maxMetadataBytes > MAX_WRITER_METADATA_BYTES) fail("invalid_limit");
   if (sourceIds !== undefined && ((!Array.isArray(sourceIds) && !(sourceIds instanceof Set))
     || sourceIds.size > 2000 || sourceIds.length > 2000 || [...sourceIds].some((id) => !SOURCE_ID.test(id)))) fail("invalid_source_id");
+  // A supplied record view must share its caller's budgeted reader, so its lazy
+  // journal reads and the summary reads below use one aggregate IO budget.
+  if (records !== undefined && (typeof readBinary !== "function" || !records || !Array.isArray(records.candidates)
+    || !Number.isSafeInteger(records.metadataBytes) || records.metadataBytes < 0
+    || typeof records.readJournal !== "function")) fail("invalid_markdown_state");
   const selected = sourceIds === undefined ? null : new Set(sourceIds);
-  let used = 0;
+  const supplied = records !== undefined;
+  let used = 0, summaryBytes = 0;
+  const bytesRead = () => supplied ? records.metadataBytes + summaryBytes : used;
   const warn = (code, sourceId) => {
     result.complete = false;
     if (result.warnings.length < 40 && !result.warnings.some((item) => item.code === code && item.sourceId === sourceId)) {
@@ -169,33 +175,32 @@ function readAdoptions(root, { maxMetadataBytes = MAX_METADATA_BYTES, sourceIds 
     }
   };
   const readBudgeted = (relative, maximum) => {
-    const remaining = maxMetadataBytes - used;
+    const remaining = maxMetadataBytes - bytesRead();
     if (remaining < 1) fail("metadata_budget_exceeded");
     // Charge attempted reads too: a concurrently changing file must not bypass
     // the aggregate budget by failing its post-read identity check.
     const info = fs.lstatSync(checkedPath(root, relative));
     if (info.size > remaining) fail("metadata_budget_exceeded");
     if (info.size > maximum) fail("file_budget_exceeded");
-    used += info.size;
-    result.metadataBytes = used;
-    return readSafeBinary(root, relative, Math.min(maximum, remaining));
+    if (supplied) summaryBytes += info.size; else used += info.size;
+    result.metadataBytes = bytesRead();
+    return (readBinary || ((name, limit) => readSafeBinary(root, name, limit)))(relative, Math.min(maximum, remaining));
   };
-  const meta = (relative, maximum) => {
-    let file;
-    try { file = readBudgeted(relative, maximum); }
-    catch (error) { if (error.code === "ENOENT") return null; throw error; }
-    try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(file.buffer)); }
-    catch { fail("invalid_markdown_adoption"); }
-  };
-  let state;
-  try { state = meta(".wiki-review/state.json", MAX_STATE_BYTES); }
-  catch (error) { warn(error.code || "invalid_markdown_adoption"); return result; }
-  if (!state) return result;
-  try { validateState(state); } catch { warn("invalid_markdown_adoption"); return result; }
-  const candidates = state.candidates.map((candidate, index) => ({ candidate, index }))
+  try {
+    if (!records) records = require("./review-history").readReviewRecords(root, { maxMetadataBytes, readBinary: readBudgeted });
+    if (!records.complete) {
+      for (const item of records.warnings || []) warn(item.code || "invalid_markdown_adoption", item.sourceId);
+      if (!(records.warnings || []).length) warn("invalid_markdown_adoption");
+      result.metadataBytes = result.bytesRead = bytesRead();
+      return result;
+    }
+  } catch (error) { warn(error.code || "invalid_markdown_adoption"); result.metadataBytes = result.bytesRead = bytesRead(); return result; }
+  const candidates = records.candidates.map((candidate, index) => ({ candidate, index }))
     .filter(({ candidate }) => candidate?.markdownSource !== undefined && (!selected || selected.has(candidate.markdownSource.sourceId)))
+    .filter(({ candidate }) => candidate.status === "ready" || candidate.status === "adopted")
     .sort((a, b) => String(b.candidate.adoptedAt || b.candidate.createdAt).localeCompare(String(a.candidate.adoptedAt || a.candidate.createdAt)) || b.index - a.index)
     .map(({ candidate }) => candidate);
+  const blocked = new Set();
   for (const candidate of candidates) {
     const id = candidate.markdownSource?.sourceId;
     try {
@@ -204,8 +209,8 @@ function readAdoptions(root, { maxMetadataBytes = MAX_METADATA_BYTES, sourceIds 
       // Retain identity metadata for history filtering, but older journals do
       // not establish the latest committed source and can consume a full store
       // snapshot each. Read them only while a source still needs its baseline.
-      if (result.sources.has(id)) continue;
-      const journal = meta(`.wiki-review/journals/${candidate.id}.json`, MAX_JOURNAL_BYTES);
+      if (result.sources.has(id) || blocked.has(id)) continue;
+      const journal = records.readJournal(candidate.id);
       if (candidate.status === "ready" && !journal) continue;
       validJournal(journal, candidate);
       if (!journal.committed) {
@@ -214,9 +219,15 @@ function readAdoptions(root, { maxMetadataBytes = MAX_METADATA_BYTES, sourceIds 
       if (candidate.status !== "adopted" || !TIME.test(candidate.adoptedAt)) fail("invalid_markdown_adoption");
       result.committedIds.add(candidate.id);
       if (!result.sources.has(id)) result.sources.set(id, assessSummary(root, candidate, { readBinary: readBudgeted }));
-    } catch (error) { warn(error.code || "invalid_markdown_adoption", SOURCE_ID.test(id) ? id : undefined); }
+    } catch (error) {
+      // A corrupt latest adoption must not silently make an older revision the
+      // current source. A valid pending publication can still expose its prior
+      // committed baseline, with incomplete coverage as before.
+      blocked.add(id);
+      warn(error.code || "invalid_markdown_adoption", SOURCE_ID.test(id) ? id : undefined);
+    }
   }
-  result.bytesRead = used;
+  result.metadataBytes = result.bytesRead = bytesRead();
   return result;
 }
 

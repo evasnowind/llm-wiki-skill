@@ -2,11 +2,14 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   validateRoot, validateRelativePath, safeReadFile, verifyPacket, sha256, MAX_PACKET_BYTES,
 } = require("./skill-retrieval");
-const { STORE, MAX_STATE_BYTES, MAX_JOURNAL_BYTES, fail, checkedPath, readOptional, readJson, atomicWrite, json, withLock } = require("./skill-state-io");
+const { STORE, MAX_STATE_BYTES, MAX_JOURNAL_BYTES, fail, checkedPath, readOptional, readJson, atomicWrite, syncDirectory, json, withLock } = require("./skill-state-io");
 const { validateBinding, verifyPackage } = require("./markdown-package");
+const { HISTORY, HISTORY_INDEX, MAX_HISTORY_INDEX_BYTES, MAX_HISTORY_ENTRIES, MAX_RECORD_BYTES,
+  MAX_WRITER_METADATA_BYTES, recordPath, journalPath: coldJournalPath, validateHistoryIndex, readReviewRecords } = require("./review-history");
 const { STATE, JOURNALS, TYPES, HASH, ISSUE, CANDIDATE, MAX_BODY, MAX_ISSUES, MAX_CANDIDATES,
   text, targetPath, issueIdentity, candidateIdentity, renderCandidate, validateCandidate, validateState,
   appendRecord, updatedIndex, validateJournal } = require("./review-records");
@@ -81,6 +84,17 @@ function saveState(root, state) {
   atomicWrite(root, STATE, content);
 }
 
+function records(root) {
+  const result = readReviewRecords(root, { maxMetadataBytes: MAX_WRITER_METADATA_BYTES });
+  if (!result.complete) fail(result.warnings[0]?.code || "invalid_review_history");
+  return result;
+}
+
+function originalCandidate(candidate) {
+  const result = clone(candidate); result.status = "ready"; delete result.adoptedAt;
+  return result;
+}
+
 function journalPaths(root) {
   const directory = checkedPath(root, JOURNALS);
   if (!fs.existsSync(directory)) return [];
@@ -94,21 +108,171 @@ function journalPaths(root) {
 }
 
 function assertNoPending(root) {
-  const state = loadState(root);
+  const view = records(root);
   for (const relative of journalPaths(root)) {
     const journal = validateJournal(readJson(root, relative, MAX_JOURNAL_BYTES));
     if (relative !== `${JOURNALS}/${journal.candidateId}.json`) fail("invalid_journal");
     if (!journal.committed) fail("recovery_required");
-    if (!state.candidates.some((item) => item.id === journal.candidateId && item.status === "adopted" && item.contentSha256 === journal.candidate.contentSha256)) fail("invalid_journal");
+    const candidate = view.candidates.find((item) => item.id === journal.candidateId);
+    if (!candidate || candidate.status !== "adopted" || candidate.adoptedAt !== journal.createdAt
+      || JSON.stringify(originalCandidate(candidate)) !== JSON.stringify(journal.candidate)) fail("invalid_journal");
+    const archived = view.index.entries.find((item) => item.id === journal.candidateId)?.journal;
+    if (archived) {
+      const file = readOptional(root, relative, MAX_JOURNAL_BYTES);
+      if (!file || file.sha256 !== archived.sha256 || file.buffer.length !== archived.size) fail("history_conflict");
+    }
+  }
+  return view;
+}
+
+function immutableCopy(root, relative, buffer, maximum) {
+  if (buffer.length > maximum) fail("review_history_limit");
+  const existing = readOptional(root, relative, maximum);
+  if (existing) {
+    if (!existing.buffer.equals(buffer)) fail("history_conflict");
+    return;
+  }
+  const target = checkedPath(root, relative, true);
+  const temporary = `${relative}.tmp-${crypto.randomBytes(10).toString("hex")}`;
+  const temporaryPath = checkedPath(root, temporary);
+  let fd;
+  try {
+    fd = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(fd, buffer); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+    checkedPath(root, relative); checkedPath(root, temporary);
+    // Publish without replacement. The write is complete before its name can
+    // be observed, and a concurrently created unknown file is never replaced.
+    try { fs.linkSync(temporaryPath, target); }
+    catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (!readOptional(root, relative, maximum)?.buffer.equals(buffer)) fail("history_conflict");
+    }
+    syncDirectory(path.dirname(target));
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporaryPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
+function compactUnlocked(root, { afterWrite } = {}) {
+  const view = assertNoPending(root), state = view.activeState;
+  const stateBefore = readOptional(root, STATE), indexBefore = readOptional(root, HISTORY_INDEX, MAX_HISTORY_INDEX_BYTES);
+  const candidates = state.candidates.filter((item) => item.status !== "ready");
+  const retained = state.candidates.filter((item) => item.status === "ready");
+  const requiredIssues = new Set(retained.map((item) => item.issueId).filter(Boolean));
+  const issues = state.issues.filter((item) => item.status !== "open" && !requiredIssues.has(item.id));
+  const planned = [...issues.map((record) => ({ kind: "issue", record })), ...candidates.map((record) => ({ kind: "candidate", record }))];
+  const index = clone(view.index), byId = new Map(index.entries.map((entry) => [entry.id, entry]));
+  const plannedPaths = new Set(index.entries.flatMap((entry) => [entry.path, ...(entry.journal ? [entry.journal.path] : [])]));
+  for (const { kind, record } of planned) {
+    plannedPaths.add(recordPath(kind, record.id));
+    if (kind === "candidate" && record.status === "adopted") plannedPaths.add(coldJournalPath(record.id));
+  }
+  // Only known indexed files or exact retry targets may be present. Unknown
+  // copies from another interrupted operation need inspection, not deletion.
+  for (const directory of ["candidates", "issues", "journals"]) {
+    const relative = `${HISTORY}/${directory}`, target = checkedPath(root, relative);
+    if (!fs.existsSync(target)) continue;
+    const entries = fs.readdirSync(target, { withFileTypes: true });
+    if (entries.length > MAX_HISTORY_ENTRIES + MAX_CANDIDATES + MAX_ISSUES) fail("review_history_limit");
+    for (const entry of entries) if (!entry.name.includes(".tmp-")) {
+      if (!entry.isFile() || !plannedPaths.has(`${relative}/${entry.name}`)) fail("history_conflict");
+    }
+  }
+  if (new Set([...byId.keys(), ...planned.map(({ record }) => record.id)]).size > MAX_HISTORY_ENTRIES) fail("review_history_limit");
+  const copies = [];
+  for (const { kind, record } of planned) {
+    const buffer = Buffer.from(json(record));
+    const entry = { kind, id: record.id, path: recordPath(kind, record.id), size: buffer.length, sha256: sha256(buffer) };
+    let journalFile, journalRelative;
+    if (kind === "candidate" && record.status === "adopted") {
+      journalRelative = `${JOURNALS}/${record.id}.json`;
+      journalFile = readOptional(root, journalRelative, MAX_JOURNAL_BYTES);
+      if (!journalFile) { journalRelative = coldJournalPath(record.id); journalFile = readOptional(root, journalRelative, MAX_JOURNAL_BYTES); }
+      if (!journalFile) fail("invalid_journal");
+      const journal = validateJournal(JSON.parse(journalFile.text));
+      if (!journal.committed || journal.createdAt !== record.adoptedAt
+        || JSON.stringify(originalCandidate(record)) !== JSON.stringify(journal.candidate)) fail("invalid_journal");
+      entry.journal = { path: coldJournalPath(record.id), size: journalFile.buffer.length, sha256: journalFile.sha256 };
+    }
+    const previous = byId.get(record.id);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(entry)) fail("history_conflict");
+    if (buffer.length > MAX_RECORD_BYTES) fail("review_history_limit");
+    copies.push({ entry, buffer, journalRelative });
+    if (!previous) { index.entries.push(entry); byId.set(entry.id, entry); }
+  }
+  validateHistoryIndex(index);
+  const nextIndex = json(index);
+  if (Buffer.byteLength(nextIndex) > MAX_HISTORY_INDEX_BYTES) fail("review_history_limit");
+  // Check every bounded descriptor before creating any copies. Keep only the
+  // small active records in memory; journals are copied one at a time.
+  let boundary = 0;
+  const checkpoint = (label) => { if (afterWrite) afterWrite(boundary++, label); };
+  checkpoint("before-copy");
+  for (const { entry, buffer, journalRelative } of copies) {
+    immutableCopy(root, entry.path, buffer, MAX_RECORD_BYTES); checkpoint(`record:${entry.id}`);
+    if (entry.journal) {
+      const source = readOptional(root, journalRelative, MAX_JOURNAL_BYTES);
+      if (!source || source.sha256 !== entry.journal.sha256 || source.buffer.length !== entry.journal.size) fail("history_conflict");
+      immutableCopy(root, entry.journal.path, source.buffer, MAX_JOURNAL_BYTES); checkpoint(`journal:${entry.id}`);
+    }
+  }
+  const expectedState = stateBefore?.sha256 || null;
+  if ((readOptional(root, STATE)?.sha256 || null) !== expectedState
+    || (readOptional(root, HISTORY_INDEX, MAX_HISTORY_INDEX_BYTES)?.sha256 || null) !== (indexBefore?.sha256 || null)) fail("history_conflict");
+  let indexHash = indexBefore?.sha256 || null;
+  if (index.entries.length !== view.index.entries.length) {
+    atomicWrite(root, HISTORY_INDEX, nextIndex, MAX_HISTORY_INDEX_BYTES); indexHash = sha256(nextIndex);
+  }
+  checkpoint("index");
+  const nextState = { ...state, issues: state.issues.filter((item) => !issues.some((entry) => entry.id === item.id)), candidates: retained };
+  let stateHash = expectedState;
+  if (planned.length) {
+    if ((readOptional(root, STATE)?.sha256 || null) !== expectedState) fail("history_conflict");
+    saveState(root, nextState); stateHash = sha256(json(nextState));
+  }
+  checkpoint("state");
+  let removedJournals = 0;
+  for (const relative of journalPaths(root)) {
+    const id = path.posix.basename(relative, ".json"), descriptor = byId.get(id)?.journal;
+    if (!descriptor) continue;
+    if ((readOptional(root, STATE)?.sha256 || null) !== stateHash
+      || (readOptional(root, HISTORY_INDEX, MAX_HISTORY_INDEX_BYTES)?.sha256 || null) !== indexHash) fail("history_conflict");
+    const live = readOptional(root, relative, MAX_JOURNAL_BYTES), backup = readOptional(root, descriptor.path, MAX_JOURNAL_BYTES);
+    if (!live || !backup || live.sha256 !== descriptor.sha256 || backup.sha256 !== descriptor.sha256
+      || live.buffer.length !== descriptor.size || backup.buffer.length !== descriptor.size) fail("history_conflict");
+    fs.unlinkSync(checkedPath(root, relative)); syncDirectory(path.join(root, JOURNALS)); removedJournals++;
+    checkpoint(`remove:${id}`);
+  }
+  return { version: 1, archivedCandidates: candidates.length, archivedIssues: issues.length,
+    removedJournals, historyEntries: index.entries.length, activeCandidates: retained.length, activeIssues: nextState.issues.length };
+}
+
+function compact(kbRoot, options = {}) {
+  const root = validateRoot(kbRoot);
+  return withLock(root, () => compactUnlocked(root, options));
+}
+
+function expectedPaths(root, values) {
+  if (values === undefined) return;
+  if (!Array.isArray(values) || values.length > 250) fail("invalid_arguments");
+  const seen = new Set();
+  for (const item of values) {
+    if (!item || (item.sha256 !== null && !HASH.test(item.sha256))) fail("invalid_arguments");
+    validateRelativePath(item.path);
+    if (seen.has(item.path)) fail("invalid_arguments");
+    seen.add(item.path);
+    if ((readOptional(root, item.path)?.sha256 || null) !== item.sha256) fail("issue_changed");
   }
 }
 
 function add(kbRoot, input) {
   const root = validateRoot(kbRoot);
   return withLock(root, () => {
-    assertNoPending(root);
-    const state = loadState(root);
+    const view = assertNoPending(root);
+    let state = view.activeState;
     if (!TYPES.has(input.type) || !Array.isArray(input.paths || []) || (input.paths || []).length > 50) fail("invalid_arguments");
+    expectedPaths(root, input.expectedPaths);
     if (input.packet) checkPacket(root, input.packet);
     const paths = [...new Set(input.paths || [])].sort().map((relative) => {
       validateRelativePath(relative);
@@ -118,8 +282,11 @@ function add(kbRoot, input) {
     const evidence = [...new Map((input.packet?.evidence || []).map((item) => [item.path, { path: item.path, fileSha256: item.fileSha256 }])).values()].sort((a, b) => a.path.localeCompare(b.path));
     const issue = { type: input.type, title: text(input.title, 240), reason: text(input.reason, 4000), paths, evidence, status: "open", createdAt: new Date().toISOString() };
     issue.id = issueIdentity(issue);
-    const existing = state.issues.find((item) => item.id === issue.id);
+    const existing = view.issues.find((item) => item.id === issue.id);
     if (existing) return clone(existing);
+    if (state.candidates.some((item) => item.status !== "ready") || state.issues.some((item) => item.status !== "open")) {
+      compactUnlocked(root); state = loadState(root);
+    }
     if (state.issues.length >= MAX_ISSUES) fail("review_limit");
     state.issues.push(issue);
     saveState(root, state);
@@ -127,32 +294,41 @@ function add(kbRoot, input) {
   });
 }
 
-function list(kbRoot, { status = "open" } = {}) {
+function list(kbRoot, { status = "open", scope = "all", candidateStatus = "all", limit = 100, offset = 0 } = {}) {
   const root = validateRoot(kbRoot);
-  if (!["open", "dismissed", "resolved", "all"].includes(status)) fail("invalid_arguments");
-  const state = loadState(root);
-  return { version: 1, issues: state.issues.filter((item) => status === "all" || item.status === status),
-    candidates: state.candidates.map(({ id, title, target, status: candidateStatus, issueId }) => ({ id, title, target, status: candidateStatus, issueId })) };
+  if (!["open", "dismissed", "resolved", "all"].includes(status) || !["active", "history", "all"].includes(scope)
+    || !["ready", "adopted", "cancelled", "superseded", "all"].includes(candidateStatus)
+    || !Number.isSafeInteger(limit) || limit < 1 || limit > 500 || !Number.isSafeInteger(offset) || offset < 0) fail("invalid_arguments");
+  const view = records(root), archived = new Set(view.index.entries.map((item) => item.id));
+  const selected = (item) => scope === "all" || (scope === "history" ? archived.has(item.id) : !archived.has(item.id));
+  const issues = view.issues.filter((item) => selected(item) && (status === "all" || item.status === status));
+  const candidates = view.candidates.filter((item) => selected(item) && (candidateStatus === "all" || item.status === candidateStatus));
+  return { version: 1, issues: issues.slice(offset, offset + limit),
+    candidates: candidates.slice(offset, offset + limit).map(({ id, title, target, status: state, issueId, cancelledAt, cancelReason, supersededAt, supersededBy }) =>
+      ({ id, title, target, status: state, issueId, ...(cancelledAt ? { cancelledAt } : {}), ...(cancelReason ? { cancelReason } : {}), ...(supersededAt ? { supersededAt, supersededBy } : {}) })),
+    pagination: { scope, offset, limit, issues: issues.length, candidates: candidates.length,
+      nextOffset: Math.max(issues.length, candidates.length) > offset + limit ? offset + limit : null } };
 }
 
 function show(kbRoot, id) {
   const root = validateRoot(kbRoot);
-  const state = loadState(root);
-  const issue = state.issues.find((item) => item.id === id);
+  const view = records(root);
+  const issue = view.issues.find((item) => item.id === id);
   if (issue) return clone(issue);
-  const candidate = state.candidates.find((item) => item.id === id);
+  const candidate = view.candidates.find((item) => item.id === id);
   if (!candidate) fail("not_found");
+  if (candidate.status === "adopted" && !view.readJournal(id)?.committed) fail("invalid_journal");
   return { ...clone(candidate), currentTarget: snapshot(root, candidate.target), evidenceVerification: verifyPacket(root, candidate.packet) };
 }
 
 function dismiss(kbRoot, id) {
   const root = validateRoot(kbRoot);
   return withLock(root, () => {
-    assertNoPending(root);
-    const state = loadState(root);
-    const issue = state.issues.find((item) => item.id === id);
+    const view = assertNoPending(root), state = view.activeState;
+    const issue = view.issues.find((item) => item.id === id);
     if (!issue) fail("not_found");
     if (issue.status === "resolved") fail("issue_already_resolved");
+    if (issue.status === "dismissed") return clone(issue);
     issue.status = "dismissed";
     saveState(root, state);
     return clone(issue);
@@ -162,8 +338,8 @@ function dismiss(kbRoot, id) {
 function stage(kbRoot, input) {
   const root = validateRoot(kbRoot);
   return withLock(root, () => {
-    assertNoPending(root);
-    const state = loadState(root);
+    const view = assertNoPending(root);
+    let state = view.activeState;
     checkPacket(root, input.packet);
     const target = targetPath(input.target);
     if (input.packet.evidence.some((item) => item.path === target)) fail("target_is_evidence");
@@ -186,18 +362,57 @@ function stage(kbRoot, input) {
     const targetBefore = snapshot(root, target);
     if (markdownSource && Object.hasOwn(input, "expectedTargetSha256")
       && input.expectedTargetSha256 !== (targetBefore?.sha256 || null)) fail("target_changed");
-    const candidate = { title, target, body, bodySha256: sha256(body), targetBefore, packet: clone(input.packet), issueId,
+    const packet = clone(input.packet);
+    // Freshness is a live diagnostic, not an immutable evidence assertion.
+    // Keep the original packet identity contract and never mutate caller data.
+    delete packet.freshness;
+    const candidate = { title, target, body, bodySha256: sha256(body), targetBefore, packet, issueId,
       status: "ready", createdAt: new Date().toISOString() };
     if (markdownSource) candidate.markdownSource = clone(markdownSource);
     candidate.id = candidateIdentity(candidate);
-    const existing = state.candidates.find((item) => item.id === candidate.id);
+    const existing = view.candidates.find((item) => item.id === candidate.id);
     if (existing) return clone(existing);
-    if (state.candidates.length >= MAX_CANDIDATES) fail("review_limit");
     candidate.content = renderCandidate(candidate);
     candidate.contentSha256 = sha256(candidate.content);
     validateCandidate(candidate);
+    if (state.candidates.some((item) => item.status !== "ready") || state.issues.some((item) => item.status !== "open")) {
+      compactUnlocked(root); state = loadState(root);
+    }
+    if (state.candidates.length >= MAX_CANDIDATES) fail("review_limit");
     state.candidates.push(candidate);
     saveState(root, state);
+    return clone(candidate);
+  });
+}
+
+function cancel(kbRoot, id, { reason } = {}) {
+  const root = validateRoot(kbRoot);
+  if (!CANDIDATE.test(id)) fail("invalid_arguments");
+  const cancelReason = reason === undefined ? undefined : text(reason, 4000);
+  return withLock(root, () => {
+    const view = assertNoPending(root), candidate = view.candidates.find((item) => item.id === id);
+    if (!candidate) fail("not_found");
+    if (candidate.status === "cancelled" && (cancelReason === undefined || cancelReason === candidate.cancelReason)) return clone(candidate);
+    if (candidate.status !== "ready") fail("candidate_not_ready");
+    candidate.status = "cancelled"; candidate.cancelledAt = new Date().toISOString();
+    if (cancelReason !== undefined) candidate.cancelReason = cancelReason;
+    // activeState and the merged view share validated record objects.
+    validateState(view.activeState); saveState(root, view.activeState);
+    return clone(candidate);
+  });
+}
+
+function supersede(kbRoot, id, replacementId) {
+  const root = validateRoot(kbRoot);
+  if (!CANDIDATE.test(id) || !CANDIDATE.test(replacementId) || id === replacementId) fail("invalid_arguments");
+  return withLock(root, () => {
+    const view = assertNoPending(root), candidate = view.candidates.find((item) => item.id === id), replacement = view.candidates.find((item) => item.id === replacementId);
+    if (!candidate || !replacement) fail("not_found");
+    if (candidate.status === "superseded" && candidate.supersededBy === replacementId) return clone(candidate);
+    if (candidate.status !== "ready" || replacement.status !== "ready") fail("candidate_not_ready");
+    if (candidate.target !== replacement.target) fail("replacement_target_mismatch");
+    candidate.status = "superseded"; candidate.supersededAt = new Date().toISOString(); candidate.supersededBy = replacementId;
+    validateState(view.activeState); saveState(root, view.activeState);
     return clone(candidate);
   });
 }
@@ -222,13 +437,21 @@ function createJournal(root, state, candidate) {
   const stateBefore = readOptional(root, STATE);
   const label = candidate.title.replace(/[\[\]\r\n]/gu, " ");
   const marker = `<!-- review-adopt:${candidate.id} -->`;
+  let previousCandidate;
+  if (indexBefore?.content.includes(`<!-- review-target:${sha256(candidate.target).slice(0, 24)} -->`)
+    && !state.candidates.some((item) => item.status === "adopted" && item.target === candidate.target)) {
+    const view = records(root);
+    previousCandidate = [...view.candidates].reverse().find((item) => item.status === "adopted" && item.target === candidate.target);
+    if (!previousCandidate || !view.readJournal(previousCandidate.id)?.committed) fail("index_managed_entry_changed");
+  }
   const journal = { version: 1, indexFormat: "wikilink-v1", candidateId: candidate.id, target: candidate.target, createdAt: adoptedAt, committed: false,
     candidate: clone(candidate), writes: [
       makeWrite(candidate.target, candidate.targetBefore, candidate.content),
-      makeWrite("index.md", indexBefore, updatedIndex(indexBefore, state, candidate)),
+      makeWrite("index.md", indexBefore, updatedIndex(indexBefore, state, candidate, "wikilink-v1", previousCandidate)),
       makeWrite("log.md", logBefore, appendRecord(logBefore, `${marker}\n## ${adoptedAt.slice(0, 10)} research | ${label}\n\nAdopted ${candidate.id}: ${candidate.target}`)),
       makeWrite(STATE, stateBefore, json(next)),
     ] };
+  if (previousCandidate) journal.previousCandidate = clone(previousCandidate);
   validateJournal(journal);
   return journal;
 }
@@ -268,11 +491,14 @@ function adopt(kbRoot, id, options = {}) {
     const journalPath = `${JOURNALS}/${id}.json`;
     const existingJournal = readJson(root, journalPath, MAX_JOURNAL_BYTES);
     if (existingJournal && existingJournal.committed !== true) fail("recovery_required");
-    assertNoPending(root);
-    const state = loadState(root);
-    const candidate = state.candidates.find((item) => item.id === id);
+    const view = assertNoPending(root), state = view.activeState;
+    const candidate = view.candidates.find((item) => item.id === id);
     if (!candidate) fail("not_found");
-    if (candidate.status === "adopted") return { id, status: "adopted", recovered: false };
+    if (candidate.status === "adopted") {
+      if (!view.readJournal(id)?.committed) fail("invalid_journal");
+      return { id, status: "adopted", recovered: false };
+    }
+    if (candidate.status !== "ready") fail("candidate_not_ready");
     if (candidate.markdownSource) checkMarkdownSource(root, candidate.markdownSource, candidate.target, candidate.packet);
     checkPacket(root, candidate.packet);
     if (candidate.packet.evidence.some((item) => item.path === candidate.target)) fail("target_is_evidence");
@@ -290,7 +516,12 @@ function recover(kbRoot, id, options = {}) {
   if (id && !CANDIDATE.test(id)) fail("invalid_arguments");
   return withLock(root, () => {
     const selected = journalPaths(root).filter((relative) => !id || relative === `${JOURNALS}/${id}.json`);
-    if (id && !selected.length) fail("not_found");
+    if (id && !selected.length) {
+      const view = records(root), candidate = view.candidates.find((item) => item.id === id);
+      if (!candidate || candidate.status !== "adopted") fail("not_found");
+      if (!view.readJournal(id)?.committed) fail("invalid_journal");
+      return { version: 1, recovered: [] };
+    }
     const results = [];
     for (const relative of selected) {
       const journal = validateJournal(readJson(root, relative, MAX_JOURNAL_BYTES));
@@ -301,4 +532,5 @@ function recover(kbRoot, id, options = {}) {
   }, { recover: true });
 }
 
-module.exports = { TYPES, STATE, JOURNALS, MAX_BODY, add, list, show, dismiss, stage, adopt, recover, loadState, validateJournal, assertNoPending };
+module.exports = { TYPES, STATE, JOURNALS, MAX_BODY, add, list, show, dismiss, stage, adopt, recover,
+  cancel, supersede, compact, loadState, validateJournal, assertNoPending };
